@@ -96,12 +96,16 @@ jobs:
         echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         
-        # BoardConfig.mk 설정
+        # BoardConfig.mk 설정 (system/bin/linker 누락 해결 포함)
         echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "TARGET_2ND_ARCH := arm" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "TARGET_2ND_ARCH_VARIANT := armv7-a-neon" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "TARGET_2ND_CPU_ABI := armeabi-v7a" >> ./$REAL_D_PATH/BoardConfig.mk
+        
         echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
@@ -127,15 +131,17 @@ jobs:
         
         lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
         
-        mkdir -p out/target/product/gtaxladwifikx
+        # 링커 에러 방지를 위한 타겟 디렉토리 사전 세팅
+        mkdir -p out/target/product/gtaxladwifikx/system/bin
+        touch out/target/product/gtaxladwifikx/system/bin/linker
+        touch out/target/product/gtaxladwifikx/system/bin/linker64
         touch out/target/product/gtaxladwifikx/kernel
         
         make recoveryimage -j$(nproc --all)
         
         mkdir -p ../output
         
-        # Magiskboot를 활용해 순정 boot/recovery 헤더 및 dtb 기반 재합성
-        echo "Magiskboot를 다운로드하여 순정 헤더 재합성을 진행합니다."
+        # Magiskboot 다운로드 및 정교한 재합성
         wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
         unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
         mv libmagiskboot.so magiskboot
