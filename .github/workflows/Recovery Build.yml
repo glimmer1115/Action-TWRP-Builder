@@ -97,18 +97,22 @@ jobs:
     - name: Clone device tree
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
+        REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        
+        # 기본값 설정: 동작 확인된 gtaxlwi 레포지토리 우선 시도
         if [ -z "$REAL_D_URL" ]; then
-          REAL_D_URL="https://github.com/astubenbord/android_device_samsung_gtaxlwi"
+          REAL_D_URL="https://github.com/exynos5770/android_device_samsung_gtaxlwi"
         fi
         
-        REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         if [ -z "$REAL_D_BRANCH" ]; then
           REAL_D_BRANCH="android-8.1"
         fi
         
         REAL_D_PATH="device/samsung/gtaxlwi"
         
-        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH
+        # 클론 시도 후 실패 시 다른 알려진 보조 저장소 클론
+        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH || \
+        git clone https://github.com/exynos5770/android_device_samsung_gtaxlwi -b android-8.1 ./$REAL_D_PATH
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
