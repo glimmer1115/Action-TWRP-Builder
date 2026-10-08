@@ -15,24 +15,6 @@ on:
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
         required: false
-      DEVICE_PATH:
-        description: 'DEVICE_PATH'
-        required: false
-      COMMON_TREE_URL:
-        description: 'COMMON_TREE_URL'
-        required: false
-      COMMON_PATH:
-        description: 'COMMON_PATH'
-        required: false
-      DEVICE_NAME:
-        description: 'DEVICE_NAME'
-        required: false
-      MAKEFILE_NAME:
-        description: 'MAKEFILE_NAME'
-        required: false
-      BUILD_TARGET:
-        description: 'BUILD_TARGET'
-        required: false
 
 jobs:
   build:
@@ -86,7 +68,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
       id: pwd
 
     - name: Repo Sync
@@ -94,7 +76,7 @@ jobs:
         repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
       working-directory: workspace
 
-    - name: Clone device tree
+    - name: Configure Unlocked Device Tree
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
@@ -104,31 +86,41 @@ jobs:
           git clone $REAL_D_URL -b ${REAL_D_BRANCH:-android-8.1} ./$REAL_D_PATH || true
         fi
         
-        if [ ! -f "./$REAL_D_PATH/AndroidProducts.mk" ]; then
-          echo "디바이스 트리를 자동 구성합니다."
-          mkdir -p ./$REAL_D_PATH
-          
-          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_gtaxlwi.mk" > ./$REAL_D_PATH/AndroidProducts.mk
-          
-          echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)" > ./$REAL_D_PATH/omni_gtaxlwi.mk
-          echo "PRODUCT_NAME := omni_gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
-          echo "PRODUCT_DEVICE := gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
-          echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
-          echo "PRODUCT_MODEL := SM-T580" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
-          
-          echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
-          echo "TARGET_DEVICE := gtaxlwi" >> ./$REAL_D_PATH/BoardConfig.mk
-          echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
-          echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
-          echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
-          
-          echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
-          echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
-          echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
-          echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
-          
-          echo "TARGET_NO_KERNEL := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        fi
+        # 디바이스 트리가 없거나 보완이 필요한 경우 패치된 락 해제 설정 적용
+        mkdir -p ./$REAL_D_PATH
+        
+        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_gtaxlwi.mk" > ./$REAL_D_PATH/AndroidProducts.mk
+        
+        echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)" > ./$REAL_D_PATH/omni_gtaxlwi.mk
+        echo "PRODUCT_NAME := omni_gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+        echo "PRODUCT_DEVICE := gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+        echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+        echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+        
+        # BoardConfig.mk (교육용 락, dm-verity, 강제 암호화 무력화 옵션 주입)
+        cat << 'EOF' > ./$REAL_D_PATH/BoardConfig.mk
+        TARGET_OTA_LIST_MAX_SIZE := 117964800
+        TARGET_DEVICE := gtaxlwi
+        TARGET_ARCH := arm64
+        TARGET_ARCH_VARIANT := armv8-a
+        TARGET_CPU_ABI := arm64-v8a
+
+        # 디스플레이 설정
+        TW_THEME := portrait_hdpi
+        DEVICE_RESOLUTION := 1200x1920
+        TARGET_SCREEN_WIDTH := 1200
+        TARGET_SCREEN_HEIGHT := 1920
+
+        # 부팅 보안 및 dm-verity / AVB 우회 설정
+        BOARD_AVB_ENABLE := false
+        TW_INCLUDE_CRYPTO := false
+        TW_NEVER_UNMOUNT_SYSTEM := true
+        TW_NO_REBOOT_BOOTLOADER := true
+        TW_HAS_DOWNLOAD_MODE := true
+        
+        # 더미 커널 허용 옵션
+        TARGET_NO_KERNEL := true
+        EOF
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Set Swap Space
@@ -136,7 +128,7 @@ jobs:
       with:
         swap-size-gb: 12
 
-    - name: Building recovery
+    - name: Building recovery & Odin Packaging
       run: |
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
         
@@ -151,10 +143,14 @@ jobs:
         
         make recoveryimage -j$(nproc --all)
         
-        # output 폴더 생성 및 복사
+        # output 폴더 생성 및 Odin 플래싱용 .tar 압축
         mkdir -p ../output
-        cp -v out/target/product/gtaxlwi/recovery.img ../output/ 2>/dev/null || true
-        cp -v out/target/product/gtaxlwi/ramdisk-recovery.cpio ../output/ 2>/dev/null || true
+        if [ -f out/target/product/gtaxlwi/recovery.img ]; then
+          cp -v out/target/product/gtaxlwi/recovery.img ../output/
+          cd out/target/product/gtaxlwi/
+          tar -cf ../../../../output/twrp_smt583_unlocked.tar recovery.img
+          cd ../../../..
+        fi
         
         # 빌드 결과 확인
         ls -la ../output
@@ -163,16 +159,17 @@ jobs:
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: twrp-build-files
+        name: twrp-smt583-unlocked
         path: output/*
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
         files: output/*
-        name: sm-t583-twrp-build
+        name: sm-t583-twrp-unlocked-build
         tag_name: ${{ github.run_id }}
         body: |
-          삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 완료.
+          삼성 갤럭시 탭 Advanced2 (SM-T583) 암호화 및 부팅 락 해제 패치 적용 TWRP 빌드 완료.
+          - Odin 플래싱 시 `twrp_smt583_unlocked.tar` 파일을 AP 항목에 넣어 사용하세요.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
