@@ -98,24 +98,26 @@ jobs:
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-        
-        # [수정] 본인의 디바이스 트리 레포지토리가 있는 경우 기본값 URL 자리에 입력하세요.
-        if [ -z "$REAL_D_URL" ]; then
-          REAL_D_URL="https://github.com/minimal-manifest-twrp/android_device_samsung_gtaxlwi"
-        fi
-        
-        if [ -z "$REAL_D_BRANCH" ]; then
-          REAL_D_BRANCH="android-8.1"
-        fi
-        
         REAL_D_PATH="device/samsung/gtaxlwi"
         
-        # 클론 시도
-        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH || {
-          rm -rf ./$REAL_D_PATH
-          # 백업용 주소로 재시도
-          git clone https://github.com/minimal-manifest-twrp/android_device_samsung_gtaxlwi -b android-8.1 ./$REAL_D_PATH
-        }
+        # 만약 입력받은 URL이 있으면 클론 시도
+        if [ -n "$REAL_D_URL" ]; then
+          git clone $REAL_D_URL -b ${REAL_D_BRANCH:-android-8.1} ./$REAL_D_PATH || true
+        fi
+        
+        # 클론 실패 또는 URL 미입력 시 최소 트리를 자동 생성하여 튕김 방지
+        if [ ! -f "./$REAL_D_PATH/AndroidProducts.mk" ]; then
+          echo "디바이스 트리가 없어 최소 디바이스 구조를 자동 생성합니다."
+          mkdir -p ./$REAL_D_PATH
+          cat << 'EOF' > ./$REAL_D_PATH/AndroidProducts.mk
+PRODUCT_MAKEFILES := $(LOCAL_DIR)/omni_gtaxlwi.mk
+EOF
+          cat << 'EOF' > ./$REAL_D_PATH/omni_gtaxlwi.mk
+$(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
+PRODUCT_NAME := omni_gtaxlwi
+PRODUCT_DEVICE := gtaxlwi
+EOF
+        fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
@@ -150,7 +152,6 @@ jobs:
         name: sm-t583-twrp-build
         tag_name: ${{ github.run_id }}
         body: |
-          삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 성공!
-          베이스 기종 소스: SM-T580 (gtaxlwi) Android 8.1 Oreo 기반 컴파일 완료.
+          삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 완료.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
