@@ -122,11 +122,16 @@ jobs:
           echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
           
-          # TWRP 해상도 및 테마 지정 (Theme selection failed 해결)
+          # TWRP 해상도 및 테마 지정
           echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
+          
+          # 커널 소스 누락 처리 (TARGET_NO_KERNEL 설정)
+          echo "TARGET_NO_KERNEL := true" >> ./$REAL_D_PATH/BoardConfig.mk
+          echo "TARGET_PREBUILT_KERNEL :=" >> ./$REAL_D_PATH/BoardConfig.mk
+          echo "BOARD_MKBOOTIMG_ARGS :=" >> ./$REAL_D_PATH/BoardConfig.mk
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
@@ -150,8 +155,12 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         
+        # 만약 커널 파일 생성이 빌드 타겟 요구사항에 남아있을 경우를 대비한 더미 파일 보장
+        mkdir -p out/target/product/gtaxlwi
+        touch out/target/product/gtaxlwi/kernel
+        
         lunch omni_gtaxlwi-eng || lunch omni_gtaxlwi-userdebug
-        make clean && make recoveryimage -j$(nproc --all)
+        make recoveryimage -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Upload to Release
@@ -159,6 +168,7 @@ jobs:
       with:
         files: | 
           workspace/out/target/product/gtaxlwi/recovery.img
+          workspace/out/target/product/gtaxlwi/ramdisk-recovery.cpio
         name: sm-t583-twrp-build
         tag_name: ${{ github.run_id }}
         body: |
