@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       MANIFEST_URL:
-        description: 'MANIFEST_URL (if want to use SSH keys, use git@github.com:XXXXX)'
+        description: 'MANIFEST_URL'
         required: true
         default: 'https://github.com'
       MANIFEST_BRANCH:
@@ -24,10 +24,10 @@ on:
         required: true
         default: 'device/samsung/sm-t583'
       COMMON_TREE_URL:
-        description: 'COMMON_TREE_URL (if no common tree, leave blank)'
+        description: 'COMMON_TREE_URL'
         required: false
       COMMON_PATH:
-        description: 'COMMON_PATH (if no common tree, leave blank)'
+        description: 'COMMON_PATH'
         required: false
       DEVICE_NAME:
         description: 'DEVICE_NAME'
@@ -49,19 +49,6 @@ jobs:
     permissions:
       contents: write
     steps:
-    - name: Display Run Parameters
-      run: |
-        echo "::group::User Environment Variables"
-        echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
-        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
-        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
-        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
-        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
-        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
-        echo "::endgroup::"
-
     - name: Check Out
       uses: actions/checkout@v4
 
@@ -85,15 +72,6 @@ jobs:
         distribution: 'zulu'
         java-version: '11'
 
-    - name: Setup SSH Keys
-      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') || 
-          startsWith(github.event.inputs.DEVICE_TREE_URL, 'git@github.com') ||
-          startsWith(github.event.inputs.COMMON_TREE_URL, 'git@github.com') }}
-      uses: webfactory/ssh-agent@v0.9.0
-      with:
-          ssh-private-key: |
-            ${{ secrets.SSH_PRIVATE_KEY }}
-
     - name: Install repo
       run: |
         sudo apt-get update
@@ -106,7 +84,14 @@ jobs:
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
-        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        
+        # 입력창 잘림 버그 완벽 강제 우회
+        M_URL="${{ github.event.inputs.MANIFEST_URL }}"
+        if [ "$M_URL" = "https://github.com" ] || [ "$M_URL" = "https://github.com" ] || [ -z "$M_URL" ]; then
+          M_URL="https://github.com"
+        fi
+        
+        repo init --depth=1 -u $M_URL -b ${{ github.event.inputs.MANIFEST_BRANCH }}
       id: pwd
 
     - name: Repo Sync
@@ -116,15 +101,11 @@ jobs:
 
     - name: Clone device tree
       run: |
-        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Clone common tree
-      if: |
-        github.event.inputs.COMMON_TREE_URL != null
-        && github.event.inputs.COMMON_PATH != null
-      run: |
-        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
+        D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
+        if [ "$D_URL" = "https://github.com" ] || [ "$D_URL" = "https://github.com" ] || [ -z "$D_URL" ]; then
+          D_URL="https://github.com"
+        fi
+        git clone $D_URL -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
