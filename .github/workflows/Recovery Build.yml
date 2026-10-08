@@ -68,7 +68,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
       id: pwd
 
     - name: Repo Sync
@@ -96,7 +96,7 @@ jobs:
         echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         
-        # BoardConfig.mk 설정 (보안/암호화 우회 포함)
+        # BoardConfig.mk 설정
         echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
@@ -109,4 +109,77 @@ jobs:
         echo "BOARD_AVB_ENABLE := false" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_INCLUDE_CRYPTO := false" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo
+        echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+
+    - name: Building recovery & Magiskboot Repackaging
+      run: |
+        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
+        
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        
+        lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
+        
+        mkdir -p out/target/product/gtaxladwifikx
+        touch out/target/product/gtaxladwifikx/kernel
+        
+        make recoveryimage -j$(nproc --all)
+        
+        mkdir -p ../output
+        
+        # Magiskboot를 활용해 순정 boot/recovery 헤더 및 dtb 기반 재합성
+        echo "Magiskboot를 다운로드하여 순정 헤더 재합성을 진행합니다."
+        wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+        unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
+        mv libmagiskboot.so magiskboot
+        chmod +x magiskboot
+        
+        if [ -f ../recovery.img ]; then
+          echo "순정 recovery.img 언팩 중..."
+          mkdir stock_rec && cd stock_rec
+          ../../magiskboot unpack ../../recovery.img
+          cd ..
+          
+          if [ -f out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
+            echo "TWRP ramdisk를 순정 커널/dtb와 정교하게 재합성합니다."
+            cp out/target/product/gtaxladwifikx/ramdisk-recovery.cpio stock_rec/ramdisk.cpio
+            cd stock_rec
+            ../magiskboot repack ../../recovery.img ../../output/recovery.img
+            cd ..
+          fi
+        elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
+          cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
+        fi
+        
+        if [ -f ../output/recovery.img ]; then
+          cd ../output
+          tar -cf twrp_smt583_unlocked.tar recovery.img
+          cd ..
+        fi
+        
+        ls -la ../output
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: twrp-smt583-unlocked
+        path: output/*
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: output/*
+        name: sm-t583-twrp-unlocked-build
+        tag_name: ${{ github.run_id }}
+        body: |
+          삼성 갤럭시 탭 Advanced2 (SM-T583) Magiskboot 커널/dtb 재합성 TWRP 빌드 완료.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
