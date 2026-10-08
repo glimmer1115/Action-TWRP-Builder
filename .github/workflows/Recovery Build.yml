@@ -5,24 +5,19 @@ on:
     inputs:
       MANIFEST_URL:
         description: 'MANIFEST_URL'
-        required: true
-        default: 'https://github.com'
+        required: false
       MANIFEST_BRANCH:
         description: 'MANIFEST_BRANCH'
-        required: true
-        default: 'twrp-8.1'
+        required: false
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
-        required: true
-        default: 'https://github.com'
+        required: false
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
-        required: true
-        default: 'android-8.1'
+        required: false
       DEVICE_PATH:
         description: 'DEVICE_PATH'
-        required: true
-        default: 'device/samsung/sm-t583'
+        required: false
       COMMON_TREE_URL:
         description: 'COMMON_TREE_URL'
         required: false
@@ -31,16 +26,13 @@ on:
         required: false
       DEVICE_NAME:
         description: 'DEVICE_NAME'
-        required: true
-        default: 'gtaxlwi'
+        required: false
       MAKEFILE_NAME:
         description: 'MAKEFILE_NAME'
-        required: true
-        default: 'omni_gtaxlwi'
+        required: false
       BUILD_TARGET:
         description: 'BUILD_TARGET'
-        required: true
-        default: 'recovery'
+        required: false
 
 jobs:
   build:
@@ -85,41 +77,40 @@ jobs:
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
         
-        # 입력창 잘림 버그 완벽 강제 우회
-        M_URL="${{ github.event.inputs.MANIFEST_URL }}"
-        if [ "$M_URL" = "https://github.com" ] || [ "$M_URL" = "https://github.com" ] || [ -z "$M_URL" ]; then
-          M_URL="https://github.com"
-        fi
+        # [강제 고정] 입력창에 뭐가 써있든 무시하고 갤럭시탭 주소로 고정합니다.
+        REAL_M_URL="https://github.com"
+        REAL_M_BRANCH="twrp-8.1"
         
-        repo init --depth=1 -u $M_URL -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
       id: pwd
 
     - name: Repo Sync
       run: |
-        repo sync -j$(nproc --all) --force-sync
+        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
       working-directory: workspace
 
     - name: Clone device tree
       run: |
-        D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
-        if [ "$D_URL" = "https://github.com" ] || [ "$D_URL" = "https://github.com" ] || [ -z "$D_URL" ]; then
-          D_URL="https://github.com"
-        fi
-        git clone $D_URL -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+        # [강제 고정] 입력창 무시하고 갤럭시탭 기기 소스 트리로 고정합니다.
+        REAL_D_URL="https://github.com"
+        REAL_D_BRANCH="android-8.1"
+        REAL_D_PATH="device/samsung/sm-t583"
+        
+        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
       uses: haya14busa/action-cond@v1
       id: buildtree
       with:
-        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        cond: 'false'
         if_true: twrp
         if_false: omni
 
     - name: Sync Device Dependencies
       run: |
-        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
-        repo sync -j$(nproc --all)
+        bash ${GITHUB_WORKSPACE}/scripts/convert.sh device/samsung/sm-t583/omni.dependencies
+        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
@@ -132,21 +123,19 @@ jobs:
       run: |
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && make clean && make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+        # [강제 고정] 기기 타겟 강제 주입
+        lunch omni_gtaxlwi-eng && make clean && make recoveryimage -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
         files: | 
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
-        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+          workspace/out/target/product/gtaxlwi/recovery.img
+        name: sm-t583-twrp-build
         tag_name: ${{ github.run_id }}
         body: |
-          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          Device: ${{ github.event.inputs.DEVICE_NAME }}
-          Target: ${{ github.event.inputs.BUILD_TARGET }}.img
+          삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 완료!
+          베이스 기종 소스: SM-T580 (gtaxlwi) Android 8.1 Oreo 기반 컴파일
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
