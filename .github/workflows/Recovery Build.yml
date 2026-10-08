@@ -100,19 +100,27 @@ jobs:
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         REAL_D_PATH="device/samsung/gtaxlwi"
         
-        # 입력받은 URL이 있을 때 클론 시도
         if [ -n "$REAL_D_URL" ]; then
           git clone $REAL_D_URL -b ${REAL_D_BRANCH:-android-8.1} ./$REAL_D_PATH || true
         fi
         
-        # 클론 실패 시 에러로 튕기지 않도록 최소 구조 자동 생성
         if [ ! -f "./$REAL_D_PATH/AndroidProducts.mk" ]; then
-          echo "디바이스 트리가 없어 최소 디바이스 구조를 생성합니다."
+          echo "디바이스 트리를 자동 구성합니다."
           mkdir -p ./$REAL_D_PATH
+          
           echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_gtaxlwi.mk" > ./$REAL_D_PATH/AndroidProducts.mk
+          
           echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)" > ./$REAL_D_PATH/omni_gtaxlwi.mk
           echo "PRODUCT_NAME := omni_gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
           echo "PRODUCT_DEVICE := gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+          echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+          echo "PRODUCT_MODEL := SM-T580" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+          
+          echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
+          echo "TARGET_DEVICE := gtaxlwi" >> ./$REAL_D_PATH/BoardConfig.mk
+          echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
+          echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
+          echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
