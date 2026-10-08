@@ -99,8 +99,9 @@ jobs:
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         
+        # [수정] 본인의 디바이스 트리 레포지토리가 있는 경우 기본값 URL 자리에 입력하세요.
         if [ -z "$REAL_D_URL" ]; then
-          REAL_D_URL="https://github.com/exynos5770/android_device_samsung_gtaxlwi"
+          REAL_D_URL="https://github.com/minimal-manifest-twrp/android_device_samsung_gtaxlwi"
         fi
         
         if [ -z "$REAL_D_BRANCH" ]; then
@@ -109,8 +110,12 @@ jobs:
         
         REAL_D_PATH="device/samsung/gtaxlwi"
         
-        # 클론 실패 시 생성되다 만 디렉터리를 지우고 안전하게 폴백 클론 수행
-        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH || { rm -rf ./$REAL_D_PATH && git clone https://github.com/exynos5770/android_device_samsung_gtaxlwi -b android-8.1 ./$REAL_D_PATH; }
+        # 클론 시도
+        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH || {
+          rm -rf ./$REAL_D_PATH
+          # 백업용 주소로 재시도
+          git clone https://github.com/minimal-manifest-twrp/android_device_samsung_gtaxlwi -b android-8.1 ./$REAL_D_PATH
+        }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
@@ -128,7 +133,6 @@ jobs:
 
     - name: Building recovery
       run: |
-        # roomservice.py 구형 파이썬 문법 예외 처리 자동 수정
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
         
         source build/envsetup.sh
