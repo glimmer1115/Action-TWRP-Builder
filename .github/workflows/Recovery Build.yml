@@ -98,19 +98,17 @@ jobs:
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         if [ -z "$REAL_D_URL" ]; then
-          # [수정됨] 실제 접근 가능한 Public gtaxlwi 디바이스 트리 레포지토리
           REAL_D_URL="https://github.com/aosp-galaxy/android_device_samsung_gtaxlwi"
         fi
         
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         if [ -z "$REAL_D_BRANCH" ]; then
-          # [수정됨] 해당 레포지토리에 존재하는 올바른 브랜치명
           REAL_D_BRANCH="omni-8.1"
         fi
         
         REAL_D_PATH="device/samsung/gtaxlwi"
         
-        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH
+        git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH || git clone https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni ./$REAL_D_PATH
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
