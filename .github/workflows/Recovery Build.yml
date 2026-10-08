@@ -77,8 +77,16 @@ jobs:
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
         
-        REAL_M_URL="https://github.com"
-        REAL_M_BRANCH="twrp-8.1"
+        # [수정됨] https://github.com 뒤에 TWRP Omni 8.1 manifest 경로 추가
+        REAL_M_URL="${{ github.event.inputs.MANIFEST_URL }}"
+        if [ -z "$REAL_M_URL" ]; then
+          REAL_M_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni"
+        fi
+        
+        REAL_M_BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
+        if [ -z "$REAL_M_BRANCH" ]; then
+          REAL_M_BRANCH="twrp-8.1"
+        fi
         
         repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
       id: pwd
@@ -90,9 +98,18 @@ jobs:
 
     - name: Clone device tree
       run: |
-        REAL_D_URL="https://github.com"
-        REAL_D_BRANCH="android-8.1"
-        REAL_D_PATH="device/samsung/sm-t583"
+        # [수정됨] 디바이스 트리 레포지토리 전체 URL 설정
+        REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
+        if [ -z "$REAL_D_URL" ]; then
+          REAL_D_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni" # 본인의 T583/T580 디바이스 트리 URL이 있다면 변경하세요.
+        fi
+        
+        REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        if [ -z "$REAL_D_BRANCH" ]; then
+          REAL_D_BRANCH="android-8.1"
+        fi
+        
+        REAL_D_PATH="device/samsung/gtaxlwi"
         
         git clone $REAL_D_URL -b $REAL_D_BRANCH ./$REAL_D_PATH
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -109,7 +126,7 @@ jobs:
       # 스크립트 충돌로 인한 강제 정지를 막기 위해 에러 처리 무시 장치 연동
       run: |
         if [ -f ${GITHUB_WORKSPACE}/scripts/convert.sh ]; then
-          bash ${GITHUB_WORKSPACE}/scripts/convert.sh device/samsung/sm-t583/omni.dependencies || true
+          bash ${GITHUB_WORKSPACE}/scripts/convert.sh device/samsung/gtaxlwi/omni.dependencies || true
         fi
         repo sync -c -j4 --force-sync --no-clone-bundle --no-tags || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
