@@ -150,14 +150,20 @@ jobs:
         
         lunch omni_gtaxlwi-eng || lunch omni_gtaxlwi-userdebug
         make recoveryimage -j$(nproc --all)
+        
+        # 생성된 결과물 파일 모으기
+        mkdir -p ../output
+        find out/target/product/gtaxlwi/ -name "*.img" -exec cp {} ../output/ \;
+        find out/target/product/gtaxlwi/ -name "*.cpio" -exec cp {} ../output/ \;
+        
+        # 파일이 잘 모였는지 출력 확인
+        ls -la ../output
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
-        files: |
-          workspace/out/target/product/gtaxlwi/*.img
-          workspace/out/target/product/gtaxlwi/*.cpio
+        files: output/*
         name: sm-t583-twrp-build
         tag_name: ${{ github.run_id }}
         body: |
