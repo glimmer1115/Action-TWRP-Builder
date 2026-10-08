@@ -122,26 +122,16 @@ jobs:
           echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
           
-          # TWRP 해상도 및 테마 지정
           echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
           
-          # 커널 소스 누락 처리 (TARGET_NO_KERNEL 설정)
           echo "TARGET_NO_KERNEL := true" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "TARGET_PREBUILT_KERNEL :=" >> ./$REAL_D_PATH/BoardConfig.mk
           echo "BOARD_MKBOOTIMG_ARGS :=" >> ./$REAL_D_PATH/BoardConfig.mk
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Check Build Tree
-      uses: haya14busa/action-cond@v1
-      id: buildtree
-      with:
-        cond: 'false'
-        if_true: twrp
-        if_false: omni
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
@@ -155,7 +145,6 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         
-        # 만약 커널 파일 생성이 빌드 타겟 요구사항에 남아있을 경우를 대비한 더미 파일 보장
         mkdir -p out/target/product/gtaxlwi
         touch out/target/product/gtaxlwi/kernel
         
@@ -166,9 +155,9 @@ jobs:
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
-        files: | 
-          workspace/out/target/product/gtaxlwi/recovery.img
-          workspace/out/target/product/gtaxlwi/ramdisk-recovery.cpio
+        files: |
+          workspace/out/target/product/gtaxlwi/*.img
+          workspace/out/target/product/gtaxlwi/*.cpio
         name: sm-t583-twrp-build
         tag_name: ${{ github.run_id }}
         body: |
