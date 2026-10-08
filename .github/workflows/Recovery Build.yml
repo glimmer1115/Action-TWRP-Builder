@@ -86,7 +86,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
       id: pwd
 
     - name: Repo Sync
@@ -98,12 +98,13 @@ jobs:
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         if [ -z "$REAL_D_URL" ]; then
-          REAL_D_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni"
+          REAL_D_URL="https://github.com/TeamWin/android_device_samsung_gtaxlwi"
         fi
         
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         if [ -z "$REAL_D_BRANCH" ]; then
-          REAL_D_BRANCH="android-8.1"
+          # TeamWin 공식 gtaxlwi 디바이스 트리의 존재하는 브랜치 지정
+          REAL_D_BRANCH="android-7.1"
         fi
         
         REAL_D_PATH="device/samsung/gtaxlwi"
@@ -149,6 +150,4 @@ jobs:
         tag_name: ${{ github.run_id }}
         body: |
           삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 성공!
-          베이스 기종 소스: SM-T580 (gtaxlwi) Android 8.1 Oreo 기반 컴파일 완료.
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          베이스 기종 소스: SM-T580 (gtaxlwi) Android 8.1 Oreo
