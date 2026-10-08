@@ -100,23 +100,19 @@ jobs:
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         REAL_D_PATH="device/samsung/gtaxlwi"
         
-        # 만약 입력받은 URL이 있으면 클론 시도
+        # 입력받은 URL이 있을 때 클론 시도
         if [ -n "$REAL_D_URL" ]; then
           git clone $REAL_D_URL -b ${REAL_D_BRANCH:-android-8.1} ./$REAL_D_PATH || true
         fi
         
-        # 클론 실패 또는 URL 미입력 시 최소 트리를 자동 생성하여 튕김 방지
+        # 클론 실패 시 에러로 튕기지 않도록 최소 구조 자동 생성
         if [ ! -f "./$REAL_D_PATH/AndroidProducts.mk" ]; then
-          echo "디바이스 트리가 없어 최소 디바이스 구조를 자동 생성합니다."
+          echo "디바이스 트리가 없어 최소 디바이스 구조를 생성합니다."
           mkdir -p ./$REAL_D_PATH
-          cat << 'EOF' > ./$REAL_D_PATH/AndroidProducts.mk
-PRODUCT_MAKEFILES := $(LOCAL_DIR)/omni_gtaxlwi.mk
-EOF
-          cat << 'EOF' > ./$REAL_D_PATH/omni_gtaxlwi.mk
-$(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
-PRODUCT_NAME := omni_gtaxlwi
-PRODUCT_DEVICE := gtaxlwi
-EOF
+          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_gtaxlwi.mk" > ./$REAL_D_PATH/AndroidProducts.mk
+          echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)" > ./$REAL_D_PATH/omni_gtaxlwi.mk
+          echo "PRODUCT_NAME := omni_gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
+          echo "PRODUCT_DEVICE := gtaxlwi" >> ./$REAL_D_PATH/omni_gtaxlwi.mk
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
