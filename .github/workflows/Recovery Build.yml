@@ -37,7 +37,7 @@ jobs:
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
-            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 tar
+            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 tar android-sdk-libsparse-utils
 
     - name: Install OpenJDK
       uses: actions/setup-java@v5
@@ -68,7 +68,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
       id: pwd
 
     - name: Repo Sync
@@ -76,7 +76,7 @@ jobs:
         repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
       working-directory: workspace
 
-    - name: Configure Unlocked Device Tree
+    - name: Configure Device Tree (SM-T583 / gtaxladwifikx)
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
@@ -96,6 +96,7 @@ jobs:
         echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         
+        # BoardConfig.mk 설정 (보안/암호화 우회 포함)
         echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
@@ -108,54 +109,4 @@ jobs:
         echo "BOARD_AVB_ENABLE := false" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_INCLUDE_CRYPTO := false" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_NO_KERNEL := true" >> ./$REAL_D_PATH/BoardConfig.mk
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
-
-    - name: Building recovery & Odin Packaging
-      run: |
-        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
-        
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        
-        lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
-        
-        mkdir -p out/target/product/gtaxladwifikx
-        touch out/target/product/gtaxladwifikx/kernel
-        
-        make recoveryimage -j$(nproc --all)
-        
-        mkdir -p ../output
-        if [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
-          cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
-          cd out/target/product/gtaxladwifikx/
-          tar -cf ../../../../output/twrp_smt583_unlocked.tar recovery.img
-          cd ../../../..
-        fi
-        
-        ls -la ../output
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: twrp-smt583-unlocked
-        path: output/*
-
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: output/*
-        name: sm-t583-twrp-unlocked-build
-        tag_name: ${{ github.run_id }}
-        body: |
-          삼성 갤럭시 탭 Advanced2 (SM-T583 / gtaxladwifikx) 커스텀 TWRP 빌드 완료.
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        echo
