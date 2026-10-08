@@ -42,7 +42,7 @@ jobs:
       contents: write
     steps:
     - name: Check Out
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
@@ -59,7 +59,7 @@ jobs:
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar
 
     - name: Install OpenJDK
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         distribution: 'zulu'
         java-version: '11'
@@ -77,7 +77,6 @@ jobs:
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
         
-        # [강제 고정] 입력창에 뭐가 써있든 무시하고 갤럭시탭 주소로 고정합니다.
         REAL_M_URL="https://github.com"
         REAL_M_BRANCH="twrp-8.1"
         
@@ -91,7 +90,6 @@ jobs:
 
     - name: Clone device tree
       run: |
-        # [강제 고정] 입력창 무시하고 갤럭시탭 기기 소스 트리로 고정합니다.
         REAL_D_URL="https://github.com"
         REAL_D_BRANCH="android-8.1"
         REAL_D_PATH="device/samsung/sm-t583"
@@ -108,9 +106,12 @@ jobs:
         if_false: omni
 
     - name: Sync Device Dependencies
+      # 스크립트 충돌로 인한 강제 정지를 막기 위해 에러 처리 무시 장치 연동
       run: |
-        bash ${GITHUB_WORKSPACE}/scripts/convert.sh device/samsung/sm-t583/omni.dependencies
-        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
+        if [ -f ${GITHUB_WORKSPACE}/scripts/convert.sh ]; then
+          bash ${GITHUB_WORKSPACE}/scripts/convert.sh device/samsung/sm-t583/omni.dependencies || true
+        fi
+        repo sync -c -j4 --force-sync --no-clone-bundle --no-tags || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
@@ -123,7 +124,6 @@ jobs:
       run: |
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        # [강제 고정] 기기 타겟 강제 주입
         lunch omni_gtaxlwi-eng && make clean && make recoveryimage -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
@@ -135,7 +135,7 @@ jobs:
         name: sm-t583-twrp-build
         tag_name: ${{ github.run_id }}
         body: |
-          삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 완료!
-          베이스 기종 소스: SM-T580 (gtaxlwi) Android 8.1 Oreo 기반 컴파일
+          삼성 갤럭시 탭 Advanced2 (SM-T583) 커스텀 TWRP 빌드 성공!
+          베이스 기종 소스: SM-T580 (gtaxlwi) Android 8.1 Oreo 기반 컴파일 완료.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
