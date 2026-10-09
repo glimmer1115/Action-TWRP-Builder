@@ -236,24 +236,58 @@ jobs:
         working-directory: workspace
         run: |
           IMG=$(ls out/target/product/*/recovery.img | head -n1)
+          PROD_DIR=$(dirname "$IMG")
           echo "built: $IMG"
+          ls -l "$PROD_DIR" | grep -i ramdisk || true
           mkdir -p output
-          cp "$IMG" output/recovery.img
+          MB="$GITHUB_WORKSPACE/tools/magiskboot"
 
-          # 삼성 부트로더용 SEAndroid 마커 (이미 있으면 중복 추가 안 함)
-          if ! tail -c 16 output/recovery.img | grep -q "SEANDROIDENFORCE"; then
-            printf 'SEANDROIDENFORCE' >> output/recovery.img
+          add_marker() {
+            if ! tail -c 16 "$1" | grep -q "SEANDROIDENFORCE"; then
+              printf 'SEANDROIDENFORCE' >> "$1"
+            fi
+          }
+
+          # A) 트리가 만든 recovery.img 그대로 (native)
+          mkdir -p pack_native
+          cp "$IMG" pack_native/recovery.img
+          add_marker pack_native/recovery.img
+          (cd pack_native && tar -H ustar -c recovery.img > ../output/twrp_native.tar)
+
+          # B) 순정 커널/DT/헤더 유지 + TWRP ramdisk 만 교체 (repack)
+          rm -rf repack && mkdir repack
+          if (
+            set -e
+            cd repack
+            cp "$GITHUB_WORKSPACE/stock/stock_recovery.img" stock.img
+            "$MB" unpack -h stock.img
+            if [ -f "$PROD_DIR/ramdisk-recovery.cpio" ]; then
+              cp "$PROD_DIR/ramdisk-recovery.cpio" ramdisk.cpio
+            elif [ -f "$PROD_DIR/ramdisk-recovery.img" ]; then
+              gzip -dc "$PROD_DIR/ramdisk-recovery.img" > ramdisk.cpio 2>/dev/null \
+                || cp "$PROD_DIR/ramdisk-recovery.img" ramdisk.cpio
+            else
+              echo "TWRP ramdisk 파일을 찾지 못했습니다"; exit 1
+            fi
+            # TWRP 는 permissive 로 올리는 것이 안전하다
+            sed -i 's/^cmdline=.*/& androidboot.selinux=permissive/' header
+            echo "== repack header =="; cat header
+            "$MB" repack stock.img new-boot.img
+          ); then
+            mkdir -p pack_repack
+            cp repack/new-boot.img pack_repack/recovery.img
+            add_marker pack_repack/recovery.img
+            (cd pack_repack && tar -H ustar -c recovery.img > ../output/twrp_repack.tar)
+            cp pack_repack/recovery.img output/recovery_repack.img
+          else
+            echo "::warning::repack 실패. native 이미지만 생성됩니다."
           fi
+          cp pack_native/recovery.img output/recovery_native.img
 
-          echo "stock : $(stat -c %s "$GITHUB_WORKSPACE/stock/stock_recovery.img") bytes"
-          echo "built : $(stat -c %s output/recovery.img) bytes"
-
-          # Odin AP 슬롯용 tar (vbmeta 는 이 기기에 없으므로 포함하지 않는다)
-          cd output
-          tar -H ustar -c recovery.img > twrp_recovery.tar
-          cp twrp_recovery.tar twrp_recovery.tar.md5
-          md5sum -t twrp_recovery.tar >> twrp_recovery.tar.md5
-          ls -la
+          echo "stock  : $(stat -c %s "$GITHUB_WORKSPACE/stock/stock_recovery.img") bytes"
+          echo "native : $(stat -c %s output/recovery_native.img) bytes"
+          [ -f output/recovery_repack.img ] && echo "repack : $(stat -c %s output/recovery_repack.img) bytes"
+          ls -la output
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
