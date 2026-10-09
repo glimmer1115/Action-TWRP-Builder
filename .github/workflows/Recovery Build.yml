@@ -37,7 +37,8 @@ jobs:
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libncurses5 libtinfo5 libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
-            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils || true
+            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils \
+            bison flex || true
             
         # 심볼릭 링크 강제 연결 (python 및 libncurses5)
         sudo ln -sf /usr/bin/python3 /usr/bin/python || true
@@ -129,13 +130,19 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
+        # bison / flex 누락 대비 심볼릭 링크 패치
+        mkdir -p prebuilts/misc/linux-x86/bison
+        mkdir -p prebuilts/misc/linux-x86/flex
+        sudo ln -sf $(which bison) prebuilts/misc/linux-x86/bison/bison || true
+        sudo ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
+
         # Python 2 -> Python 3 호환성 일괄 패치
         find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
         
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
         sed -i 's/print "\(.*\)"/print("\1")/g' build/tools/check_radio_versions.py || true
         
-        # fingerprint 길이 제한 패치 (post_process_props.py 수정)
+        # fingerprint 길이 제한 패치
         sed -i 's/91/128/g' build/tools/post_process_props.py || true
         
         source build/envsetup.sh
