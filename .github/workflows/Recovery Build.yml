@@ -130,11 +130,18 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
-        # bison / flex 누락 대비 심볼릭 링크 패치
+        # bison 및 flex 시스템 바이너리를 주요 prebuilts 경로 및 PATH 전체에 바인딩
+        BISON_PATH=$(which bison)
+        FLEX_PATH=$(which flex)
+        
         mkdir -p prebuilts/misc/linux-x86/bison
         mkdir -p prebuilts/misc/linux-x86/flex
-        sudo ln -sf $(which bison) prebuilts/misc/linux-x86/bison/bison || true
-        sudo ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
+        mkdir -p prebuilts/build-tools/path/linux-x86
+        
+        ln -sf $BISON_PATH prebuilts/misc/linux-x86/bison/bison || true
+        ln -sf $FLEX_PATH prebuilts/misc/linux-x86/flex/flex || true
+        ln -sf $BISON_PATH prebuilts/build-tools/path/linux-x86/bison || true
+        ln -sf $FLEX_PATH prebuilts/build-tools/path/linux-x86/flex || true
 
         # Python 2 -> Python 3 호환성 일괄 패치
         find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
