@@ -109,8 +109,6 @@ jobs:
           git config --global user.email "actions@users.noreply.github.com"
           mkdir -p workspace && cd workspace
           repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
-          
-          # 네트워크 오류 대응을 위한 재시도 루프
           for i in {1..3}; do
             echo "Sync attempt $i..."
             repo sync -c -j4 --force-sync --no-clone-bundle --no-tags && break || {
@@ -181,7 +179,7 @@ jobs:
           make -j"$(nproc)" recoveryimage 2>&1 | tee build_log.txt
           echo "PRODUCT_DIR=$ANDROID_PRODUCT_OUT" >> "$GITHUB_ENV"
 
-      - name: Package for Odin (Knox-Buster)
+      - name: Package for Odin (Multi-Compression)
         working-directory: workspace
         run: |
           WS="$PWD"
@@ -190,35 +188,14 @@ jobs:
           mkdir -p output
           cat > "$WS/repack.py" <<'PY'
           import os, sys, struct, hashlib, gzip
+          try:
+              import lz4.frame
+          except ImportError:
+              lz4 = None
+
           def pad(n, p): return (-n) % p
-          src, dst, rd_path = sys.argv[1:4]
-          extra_cmd = sys.argv[4] if len(sys.argv) > 4 else ""
-          if not src or not os.path.exists(src):
-              print(f"Error: Source image {src} not found"); sys.exit(1)
-          data = open(src, "rb").read()
-          (k_size, k_addr, r_size, r_addr, s_size, s_addr, t_addr, p_size, v40, os_v) = struct.unpack_from("<10I", data, 8)
-          name, cmdline, idv, extra = data[48:64], data[64:576], data[576:608], data[608:1632]
-          pos = p_size
-          kernel = data[pos:pos + k_size]; pos += k_size + pad(k_size, p_size)
-          ramdisk = data[pos:pos + r_size]; pos += r_size + pad(r_size, p_size)
-          second = data[pos:pos + s_size]; pos += s_size + pad(s_size, p_size)
-          dt = data[pos:pos + (v40 if v40 > 4 else 0)]
-          cmd_str = cmdline.split(b"\0")[0].decode("latin1")
-          extra_str = extra.split(b"\0")[0].decode("latin1")
-          if extra_cmd:
-              bypass_flags = "quiet ignore_loglevel androidboot.selinux=permissive"
-              if bypass_flags not in cmd_str + extra_str:
-                  cmd_str = (cmd_str + " " + bypass_flags).strip()
-          sha = hashlib.sha1()
-          # 아래 부분에서 new_rd 정의 오류 수정 (이미 정의된 rd_path 기반 처리)
-          # 실제 파일 읽기 후에 sha 계산하도록 순서 조정됨
-          PY
-          # (파이썬 내부 로직 보강을 위해 다시 작성)
-          cat > "$WS/repack.py" <<'PY'
-          import os, sys, struct, hashlib, gzip
-          def pad(n, p): return (-n) % p
-          src, dst, rd_path = sys.argv[1:4]
-          extra_cmd = sys.argv[4] if len(sys.argv) > 4 else ""
+          src, dst, rd_path, comp_type = sys.argv[1:5]
+          extra_cmd = sys.argv[5] if len(sys.argv) > 5 else "androidboot.selinux=permissive"
           if not src or not os.path.exists(src):
               print(f"Error: Source image {src} not found"); sys.exit(1)
           data = open(src, "rb").read()
@@ -231,17 +208,23 @@ jobs:
           dt = data[pos:pos + (v40 if v40 > 4 else 0)]
           cmd_str = cmdline.split(b"\0")[0].decode("latin1")
           extra_str = extra.split(b"\0")[0].decode("latin1")
-          if extra_cmd:
-              bypass_flags = "quiet ignore_loglevel androidboot.selinux=permissive"
-              if bypass_flags not in cmd_str + extra_str:
-                  cmd_str = (cmd_str + " " + bypass_flags).strip()
+          
+          cmd_str = (cmd_str + " " + extra_cmd).strip()
+          
           if rd_path == "-":
               new_rd = ramdisk_old
           elif not rd_path or not os.path.exists(rd_path):
               print(f"Error: Ramdisk path {rd_path} is invalid"); sys.exit(1)
           else:
               new_rd = open(rd_path, "rb").read()
-              if new_rd[:2] != b"\x1f\x8b": new_rd = gzip.compress(new_rd, 9)
+              if comp_type == "gzip":
+                  if new_rd[:2] != b"\x1f\x8b": new_rd = gzip.compress(new_rd, 9)
+              elif comp_type == "lz4":
+                  if lz4 is None: print("lz4 library missing"); sys.exit(1)
+                  new_rd = lz4.frame.compress(new_rd)
+              elif comp_type == "raw":
+                  pass # No compression
+          
           sha = hashlib.sha1()
           for b in (kernel, new_rd, second): sha.update(b + struct.pack("<I", len(b)))
           if len(dt): sha.update(dt + struct.pack("<I", len(dt)))
@@ -254,6 +237,8 @@ jobs:
           out += b"SEANDROIDENFORCE"
           open(dst, "wb").write(out)
           PY
+          # lz4 설치
+          pip3 install lz4
           RD=""
           for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR/recovery.img" "$PROD_DIR"/ramdisk-*.img; do
             if [ -f "$f" ]; then RD="$f"; break; fi
@@ -262,25 +247,26 @@ jobs:
             (cd "$PROD_DIR/recovery/root" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 > "$WS/twrp_ramdisk.gz")
             RD="$WS/twrp_ramdisk.gz"
           fi
-          if [ -z "$RD" ]; then
-            echo "::error::Ramdisk not found! Using fallback."
-            echo "fallback" > "$WS/emergency_rd.img"
-            RD="$WS/emergency_rd.img"
-          fi
           echo "Using ramdisk: $RD"
-          python3 "$WS/repack.py" "$STOCK" "$WS/repack_out.img" "$RD"
-          mkdir -p pack_repack && cp repack_out.img pack_repack/recovery.img
-          (cd pack_repack && tar -H ustar -c recovery.img > ../output/twrp_stealth.tar)
-          python3 "$WS/repack.py" "$STOCK" "$WS/repack_perm_out.img" "$RD" "androidboot.selinux=permissive"
-          mkdir -p pack_repack_perm && cp repack_perm_out.img pack_repack_perm/recovery.img
-          (cd pack_repack_perm && tar -H ustar -c recovery.img > ../output/twrp_aggressive.tar)
-          python3 "$WS/repack.py" "$STOCK" "$WS/ctrl_out.img" "-"
-          mkdir -p pack_ctrl && cp ctrl_out.img pack_ctrl/recovery.img
-          (cd pack_ctrl && tar -H ustar -c recovery.img > ../output/ctrl_stock.tar)
+          
+          # 1. GZIP 버전
+          python3 "$WS/repack.py" "$STOCK" "$WS/out_gzip.img" "$RD" "gzip"
+          mkdir -p pack_gzip && cp out_gzip.img pack_gzip/recovery.img
+          (cd pack_gzip && tar -H ustar -c recovery.img > ../output/twrp_gzip.tar)
+          
+          # 2. LZ4 버전
+          python3 "$WS/repack.py" "$STOCK" "$WS/out_lz4.img" "$RD" "lz4"
+          mkdir -p pack_lz4 && cp out_lz4.img pack_lz4/recovery.img
+          (cd pack_lz4 && tar -H ustar -c recovery.img > ../output/twrp_lz4.tar)
+          
+          # 3. RAW 버전
+          python3 "$WS/repack.py" "$STOCK" "$WS/out_raw.img" "$RD" "raw"
+          mkdir -p pack_raw && cp out_raw.img pack_raw/recovery.img
+          (cd pack_raw && tar -H ustar -c recovery.img > ../output/twrp_raw.tar)
 
       - name: Upload Artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: twrp-recovery
+          name: twrp-recovery-multi
           path: workspace/output/
