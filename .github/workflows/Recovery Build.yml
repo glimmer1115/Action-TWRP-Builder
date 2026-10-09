@@ -151,11 +151,6 @@ jobs:
             LUNCH="$(basename "$MK" .mk)-eng"
           fi
           echo "LUNCH=$LUNCH" >> "$GITHUB_ENV"
-          if [ "$USE_STOCK_KERNEL" = "true" ]; then
-            mkdir -p "$TREE_DIR/prebuilt"
-            cp "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$TREE_DIR/prebuilt/kernel" # Note: this needs actual kernel extraction, but keeping your logic
-            echo "TARGET_PREBUILT_KERNEL := $TREE_DIR/prebuilt/kernel" >> "$TREE_DIR/BoardConfig.mk"
-          fi
 
       - name: Build recovery
         working-directory: workspace
@@ -165,6 +160,55 @@ jobs:
           source build/envsetup.sh
           lunch "$LUNCH"
           make -j"$(nproc)" recoveryimage 2>&1 | tee build.log
+
+      - name: Fix and Patch Ramdisk (The Core Fix)
+        working-directory: workspace
+        run: |
+          PROD_DIR=$(ls -d out/target/product/*/ | head -n1)
+          mkdir -p ramdisk_fix
+          
+          # TWRP ramdisk 파일 찾기 및 압축 해제
+          RD_FILE=""
+          for f in "$PROD_DIR"ramdisk-recovery.img "$PROD_DIR"ramdisk-recovery.cpio.gz "$PROD_DIR"ramdisk-recovery.cpio; do
+            if [ -f "$f" ]; then RD_FILE="$f"; break; fi
+          done
+          
+          if [ -z "$RD_FILE" ]; then
+            echo "ramdisk file not found, trying recovery/root..."
+            # recovery/root에서 직접 생성
+            (cd "$PROD_DIR"recovery/root && find . | cpio -o -H newc | gzip -6 > ramdisk_fix/twrp_rd.gz)
+          else
+            # 파일이 있으면 압축 해제
+            if [[ "$RD_FILE" == *.gz ]] || file "$RD_FILE" | grep -q "gzip"; then
+              zcat "$RD_FILE" > ramdisk_fix/rd.cpio
+            else
+              cp "$RD_FILE" ramdisk_fix/rd.cpio
+            fi
+            mkdir -p ramdisk_fix/unpack
+            cd ramdisk_fix/unpack && cpio -idmv < ../rd.cpio
+          fi
+          
+          # --- [정밀 수술 시작] ---
+          # 1. init.rc 패치: 8.0 커널에서 충돌나는 구형 구문 제거 및 필수 서비스 수정
+          if [ -f "ramdisk_fix/unpack/init.rc" ]; then
+            echo "Patching init.rc..."
+            sed -i 's/on early-init/on init/g' ramdisk_fix/unpack/init.rc
+            # 불필요한 서비스 실행으로 인한 무한 부팅 방지 (예: vold, surfaceflinger 등 충돌 가능성 제거)
+            sed -i 's/service vold/service vold disabled/g' ramdisk_fix/unpack/init.rc
+          fi
+          
+          # 2. default.prop 수정: SELinux 및 로그 설정
+          if [ -f "ramdisk_fix/unpack/default.prop" ]; then
+            echo "Patching default.prop..."
+            echo "ro.debuggable=1" >> ramdisk_fix/unpack/default.prop
+            echo "ro.secure=0" >> ramdisk_fix/unpack/default.prop
+            echo "persist.sys.usb.config=mtp" >> ramdisk_fix/unpack/default.prop
+          fi
+          # --- [정밀 수술 종료] ---
+          
+          # 다시 묶기
+          cd ramdisk_fix/unpack && find . | cpio -o -H newc | gzip -6 > ../twrp_patched_rd.gz
+          cp ramdisk_fix/twrp_patched_rd.gz "$PROD_DIR"ramdisk-recovery.img.patched
 
       - name: Package for Odin
         working-directory: workspace
@@ -203,7 +247,7 @@ jobs:
               new_rd = ramdisk
           else:
               new_rd = open(rd_path, "rb").read()
-              if new_rd[:2] != b"\x1f\x8b": # Not gzipped
+              if new_rd[:2] != b"\x1f\x8b":
                   new_rd = gzip.compress(new_rd, 6)
 
           if extra_cmd:
@@ -233,27 +277,18 @@ jobs:
           (cd pack_native && tar -H ustar -c recovery.img > ../output/twrp_native.tar)
           cp pack_native/recovery.img output/recovery_native.img
 
-          # B) Repack with TWRP Ramdisk
-          RD=""
-          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio" "$PROD_DIR/ramdisk-recovery.cpio.gz"; do
-            if [ -f "$f" ]; then RD="$f"; break; fi
-          done
-          if [ -z "$RD" ] && [ -d "$PROD_DIR/recovery/root" ]; then
-            (cd "$PROD_DIR/recovery/root" && find . | cpio -o -H newc -R 0:0 | gzip -6 > "$WS/twrp_ramdisk.gz")
-            RD="$WS/twrp_ramdisk.gz"
-          fi
-
-          # 삼성 기기 특화 옵션 추가: selinux permissive + wait_for_resume=0 (부팅 멈춤 방지)
+          # B) Repack with PATCHED Ramdisk
+          PATCHED_RD=$(ls out/target/product/*/ramdisk-recovery.img.patched | head -n1)
           EXTRA_OPTS="androidboot.selinux=permissive wait_for_resume=0"
           
-          if [ -n "$RD" ] && python3 "$WS/repack.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$WS/repack_out.img" "$RD" "$EXTRA_OPTS"; then
+          if [ -n "$PATCHED_RD" ] && python3 "$WS/repack.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$WS/repack_out.img" "$PATCHED_RD" "$EXTRA_OPTS"; then
             mkdir -p pack_repack
             cp repack_out.img pack_repack/recovery.img
             (cd pack_repack && tar -H ustar -c recovery.img > ../output/twrp_repack.tar)
             cp pack_repack/recovery.img output/recovery_repack.img
           fi
 
-          # C) Control (Stock ramdisk)
+          # C) Control
           python3 "$WS/repack.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$WS/ctrl_out.img" "-" "$EXTRA_OPTS"
           mkdir -p pack_ctrl
           cp ctrl_out.img pack_ctrl/recovery.img
