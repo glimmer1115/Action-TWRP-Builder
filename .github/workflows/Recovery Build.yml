@@ -9,7 +9,7 @@ on:
       CODENAME_SRC: {description: '트리의 원래 코드네임', required: false, default: 'gtaxlwifi'}
       CODENAME_DST: {description: '내 기기 코드네임 (비우면 SRC)', required: false, default: ''}
       LUNCH_TARGET: {description: 'lunch 대상 (비우면 자동)', required: false, default: ''}
-      STOCK_RECOVERY_URL: {description: '순정 recovery.img URL', required: false, default: ''}
+      STOCK_RECOVERY_URL: {description: '순정 recovery.img URL (필수)', required: true, default: ''}
       USE_STOCK_KERNEL: {description: '순정 kernel 강제 사용', type: boolean, required: false, default: true}
       PUBLISH_RELEASE: {description: 'GitHub Release 업로드', type: boolean, required: false, default: false}
 
@@ -118,10 +118,24 @@ jobs:
             LUNCH="$(basename "$MK" .mk)-eng"
           fi
           echo "LUNCH=$LUNCH" >> "$GITHUB_ENV"
+
+          # ⭐ [핵심 수정] 순정 recovery.img에서 커널만 추출
           if [ "$USE_STOCK_KERNEL" = "true" ]; then
-            mkdir -p "$TREE_DIR/prebuilt"
-            cp "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$TREE_DIR/prebuilt/kernel"
-            echo "TARGET_PREBUILT_KERNEL := $TREE_DIR/prebuilt/kernel" >> "$TREE_DIR/BoardConfig.mk"
+            KEXT="$GITHUB_WORKSPACE/kext"
+            rm -rf "$KEXT"; mkdir -p "$KEXT"
+            ( cd "$KEXT" && \
+              cp "$GITHUB_WORKSPACE/stock/stock_recovery.img" boot.img && \
+              "$GITHUB_WORKSPACE/tools/magiskboot" unpack boot.img > unpack.log 2>&1 )
+            if [ -f "$KEXT/kernel" ]; then
+              KSZ=$(stat -c%s "$KEXT/kernel")
+              echo "[OK] 순정 커널 추출 완료: $KSZ bytes"
+              cp "$KEXT/kernel" "$TREE_DIR/Image"
+              echo "[OK] Image 교체 완료"
+            else
+              echo "::error::커널 추출 실패. unpack.log 확인:"
+              cat "$KEXT/unpack.log"
+              exit 1
+            fi
           fi
 
       - name: Build recovery
@@ -146,6 +160,7 @@ jobs:
               if b[:2]==b"\x1f\x8b": return "gzip"
               if b[:4]==b"\x02\x21\x4c\x18": return "lz4"
               if b[:6] in (b"070701",b"070702",b"070707"): return "cpio(uncompressed)"
+              if b[:2]==b"\x1f\x9d": return "compress(z)"
               return "unknown"
           def decom(b):
               if b[:2]==b"\x1f\x8b": return gzip.decompress(b)
@@ -156,21 +171,18 @@ jobs:
               p=sys.argv[2]; d=open(p,"rb").read()
               print(f"file          : {p}")
               print(f"size          : {len(d)} bytes")
-              print(f"magic(hex)    : {d[:8].hex()}")
               print(f"compression   : {detect(d)}")
               try:
                   raw=decom(d)
                   print(f"decompressed  : {len(raw)} bytes")
-                  r=subprocess.run(["cpio","-it","--quiet"],input=raw,capture_output=True,timeout=600)
+                  open("/tmp/_rd.cpio","wb").write(raw)
+                  r=subprocess.run(["cpio","-it","--quiet","-F","/tmp/_rd.cpio"],capture_output=True,timeout=900)
                   names=r.stdout.decode("utf-8","replace").splitlines()
                   print(f"cpio entries  : {len(names)}")
                   print("key files:")
-                  for k in ("init","sbin/recovery","res/keys","etc/recovery.fstab","etc/twrp.fstab","default.prop","ueventd.rc","etc/init.rc"):
+                  for k in ("init","sbin/recovery","res/keys","etc/recovery.fstab","etc/twrp.fstab","default.prop","ueventd.rc"):
                       hit=[n for n in names if n.lstrip('.').lstrip('/').startswith(k)]
                       print(f"   {k:22s}: {'FOUND' if hit else 'MISSING'}")
-                  print("top-level dirs:")
-                  tops=sorted({n.lstrip('.').lstrip('/').split('/')[0] for n in names if n.startswith('.') and '/' in n})
-                  print("   " + ", ".join(tops[:25]))
               except Exception as e:
                   print("cpio parse failed:", e)
               sys.exit(0)
@@ -184,22 +196,26 @@ jobs:
           print(f"cmdline ({len(c)})   : {c.decode('latin1')}")
           e=d[608:1632].split(b'\0')[0]
           print(f"extra ({len(e)})   : {e.decode('latin1')}")
-          print(f"id            : {d[576:608].hex()}")
-          if v[8]>=1:
-              rs,ro=struct.unpack_from("<IQ",d,1632)
-              print(f"rec_dtbo_size : {rs}")
-              print(f"header_size   : {struct.unpack_from('<I',d,1648)[0]}")
-          if v[8]>=2:
-              ds,da=struct.unpack_from("<IQ",d,1652)
-              print(f"dtb_size      : {ds}  dtb_addr: 0x{da:x}")
           print(f"footer        : {d[-16:]!r}")
           PY
           DIAG="$WS/diag.txt"; : > "$DIAG"
-          { echo "########## STOCK RECOVERY IMAGE ##########"
+          {
+            echo "########## 1. STOCK RECOVERY ##########"
             python3 "$WS/inspect.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img"
-            echo; echo "########## BUILD OUTPUT ($PROD_DIR) ##########"
+            echo
+            echo "########## 2. EXTRACTED KERNEL ##########"
+            if [ -f "$GITHUB_WORKSPACE/kext/kernel" ]; then
+              KSZ=$(stat -c%s "$GITHUB_WORKSPACE/kext/kernel")
+              echo "kernel size: $KSZ bytes"
+              head -c4 "$GITHUB_WORKSPACE/kext/kernel" | xxd
+            else
+              echo "!! 커널 추출 안 됨 !!"
+            fi
+            echo
+            echo "########## 3. BUILD OUTPUT ##########"
             ls -l "$PROD_DIR"/*.img 2>/dev/null
-            echo; echo "########## built recovery.img ##########"
+            echo
+            echo "########## 4. built recovery.img ##########"
             [ -f "$PROD_DIR/recovery.img" ] && python3 "$WS/inspect.py" "$PROD_DIR/recovery.img"
           } > "$DIAG" 2>&1
           cat "$DIAG"
@@ -209,9 +225,9 @@ jobs:
         run: |
           set +e
           WS="$PWD"; PROD_DIR="$PRODUCT_DIR"
-          STOCK="$GITHUB_WORKSPACE/stock/stock_recovery.img"
+          STOCK_R="$GITHUB_WORKSPACE/stock/stock_recovery.img"
           TOOLS="$GITHUB_WORKSPACE/tools"
-          PART_SIZE=$((0x002600000))
+          PART_R=$((0x002600000))
           mkdir -p output
           DIAG="$WS/diag.txt"
 
@@ -232,6 +248,8 @@ jobs:
           PERM="androidboot.selinux=permissive"
           src,dst,rd_path,cmode,cmdmode = sys.argv[1:6]
           data=open(src,"rb").read()
+          if data[:8]!=b"ANDROID!":
+              print("[fail] src not ANDROID! image:",src); sys.exit(1)
           (k_size,k_addr,r_size,r_addr,s_size,s_addr,t_addr,p_size,hdr_ver,os_v)=struct.unpack_from("<10I",data,8)
           name=data[48:64]; cmdline=data[64:576]; extra=data[608:1632]
           pos=p_size
@@ -251,10 +269,8 @@ jobs:
               if len(cand)<=511: cmd_str=cand
               else:
                   extra_str=(extra_str+" "+PERM).strip()
-                  print(f"[warn] cmdline {len(cmd_str)}B full -> perm into extra_cmdline")
           if rd_path=="-":
               new_rd=ramdisk_old
-              print(f"[info] keep stock ramdisk ({len(new_rd)}B)")
           else:
               orig=open(rd_path,"rb").read()
               raw=decom(orig)
@@ -263,7 +279,7 @@ jobs:
                   elif ramdisk_old[:4]==b"\x02\x21\x4c\x18": cmode="lz4"
                   else: cmode="raw"
               new_rd=comp(raw,cmode)
-              print(f"[info] ramdisk src={len(orig)} raw={len(raw)} mode={cmode} final={len(new_rd)}")
+              print(f"[info] rd src={len(orig)} raw={len(raw)} mode={cmode} final={len(new_rd)}")
           sha=hashlib.sha1()
           for b in (kernel,new_rd,second,rec_dtbo,dtb):
               if len(b):
@@ -289,73 +305,71 @@ jobs:
           else: sys.stdout.buffer.write(b)
           PY
 
-          # ---- 램디스크 확보 ----
+          # ---------- TWRP 램디스크 확보 ----------
           RD=""
-          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR/recovery.img" "$PROD_DIR"/ramdisk-*.img; do
+          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR"/ramdisk-*.img; do
             [ -f "$f" ] && { RD="$f"; break; }
           done
-          if [ "$RD" = "$PROD_DIR/recovery.img" ] || [ -z "$RD" ]; then
-            rm -rf "$WS/mbx"; mkdir -p "$WS/mbx"; cd "$WS/mbx"
-            "$TOOLS/magiskboot" unpack "$PROD_DIR/recovery.img" > unpack.log 2>&1
-            [ -f ramdisk.cpio ] && RD="$WS/mbx/ramdisk.cpio"
-            cd "$WS"
+          if [ -z "$RD" ] && [ -f "$PROD_DIR/recovery.img" ]; then
+            rm -rf "$WS/mbx"; mkdir -p "$WS/mbx"
+            ( cd "$WS/mbx" && "$TOOLS/magiskboot" unpack "$PROD_DIR/recovery.img" >unpack.log 2>&1 )
+            for c in ramdisk.cpio ramdisk.cpio.gz; do
+              [ -f "$WS/mbx/$c" ] && { RD="$WS/mbx/$c"; break; }
+            done
           fi
           if [ -z "$RD" ] && [ -d "$PROD_DIR/recovery/root" ]; then
             ( cd "$PROD_DIR/recovery/root" && find . | cpio -o -H newc -R 0:0 2>/dev/null > "$WS/twrp_ramdisk.cpio" )
             RD="$WS/twrp_ramdisk.cpio"
           fi
 
-          { echo; echo "########## SELECTED RAMDISK ##########"
-            echo "path: $RD"
-            python3 "$WS/inspect.py" --rd "$RD"
-          } | tee -a "$DIAG"
+          { echo; echo "########## 5. TWRP 램디스크 ##########"; echo "path: $RD"
+            python3 "$WS/inspect.py" --rd "$RD"; } | tee -a "$DIAG"
 
           if [ -z "$RD" ] || [ ! -f "$RD" ]; then
-            echo "::error::No ramdisk found. Aborting packaging."
-            exit 1
+            echo "::error::램디스크 못 찾음"; exit 1
           fi
 
           build_variant () {
-            local tag="$1" cmode="$2" cmdmode="$3" rd="$4"
+            local tag="$1" cmode="$2" cmdmode="$3" part="$4"
             echo "" | tee -a "$DIAG"
-            echo "########## VARIANT: $tag (comp=$cmode cmd=$cmdmode) ##########" | tee -a "$DIAG"
-            python3 "$WS/repack.py" "$STOCK" "$WS/out_$tag.img" "$rd" "$cmode" "$cmdmode" | tee -a "$DIAG"
-            if [ ! -f "$WS/out_$tag.img" ]; then echo "[fail] $tag repack failed" | tee -a "$DIAG"; return; fi
+            echo "########## VARIANT: $tag ##########" | tee -a "$DIAG"
+            python3 "$WS/repack.py" "$STOCK_R" "$WS/out_$tag.img" "$RD" "$cmode" "$cmdmode" 2>&1 | tee -a "$DIAG"
+            if [ ! -f "$WS/out_$tag.img" ]; then echo "[fail] $tag" | tee -a "$DIAG"; return; fi
             rm -rf "$WS/pack_$tag"; mkdir -p "$WS/pack_$tag"
             cp "$WS/out_$tag.img" "$WS/pack_$tag/recovery.img"
             ( cd "$WS/pack_$tag" && tar -H ustar -c recovery.img > "$WS/output/twrp_$tag.tar" )
             local sz; sz=$(stat -c%s "$WS/out_$tag.img")
             local flag="OK"
-            [ "$sz" -gt "$PART_SIZE" ] && flag="*** TOO BIG > partition $PART_SIZE ***"
-            echo "  -> output/twrp_$tag.tar   image=$sz bytes   $flag" | tee -a "$DIAG"
+            if [ "$sz" -gt "$part" ]; then flag="*** TOO BIG > partition($part) ***"; fi
+            echo "  -> output/twrp_$tag.tar   image=${sz}B   $flag" | tee -a "$DIAG"
           }
 
-          build_variant ctrl        raw        perm "-"
-          build_variant stockmatch  stockmatch perm "$RD"
-          build_variant gzip        gzip       perm "$RD"
-          build_variant lz4         lz4        perm "$RD"
-          build_variant raw         raw        perm "$RD"
+          mb_variant () {
+            local tag="$1"
+            echo "" | tee -a "$DIAG"
+            echo "########## VARIANT: $tag (magiskboot) ##########" | tee -a "$DIAG"
+            local d="$WS/mb_$tag"; rm -rf "$d"; mkdir -p "$d"
+            ( cd "$d" && cp "$STOCK_R" boot.img && "$TOOLS/magiskboot" unpack boot.img >unpack.log 2>&1 )
+            python3 "$WS/decomp.py" "$RD" > "$d/ramdisk.cpio" 2>>"$DIAG"
+            if [ -f "$d/header" ] && grep -q '^cmdline=' "$d/header"; then
+              grep -q 'androidboot.selinux=permissive' "$d/header" || \
+                sed -i 's/^cmdline=.*/& androidboot.selinux=permissive/' "$d/header"
+            fi
+            ( cd "$d" && "$TOOLS/magiskboot" repack boot.img new.img >repack.log 2>&1 )
+            if [ ! -f "$d/new.img" ]; then echo "[fail] magiskboot $tag" | tee -a "$DIAG"; return; fi
+            rm -rf "$WS/pack_$tag"; mkdir -p "$WS/pack_$tag"
+            cp "$d/new.img" "$WS/pack_$tag/recovery.img"
+            ( cd "$WS/pack_$tag" && tar -H ustar -c recovery.img > "$WS/output/twrp_$tag.tar" )
+            local sz; sz=$(stat -c%s "$d/new.img")
+            echo "  -> output/twrp_$tag.tar   image=${sz}B" | tee -a "$DIAG"
+          }
 
-          # ---- magiskboot 리팩 (검증된 도구) ----
-          echo "" | tee -a "$DIAG"
-          echo "########## VARIANT: magiskboot ##########" | tee -a "$DIAG"
-          rm -rf "$WS/mbwork"; mkdir -p "$WS/mbwork"; cd "$WS/mbwork"
-          cp "$STOCK" boot.img
-          "$TOOLS/magiskboot" unpack boot.img 2>&1 | tee -a "$DIAG"
-          python3 "$WS/decomp.py" "$RD" > ramdisk.cpio 2>>"$DIAG"
-          "$TOOLS/magiskboot" repack boot.img new.img 2>&1 | tee -a "$DIAG"
-          ls -l 2>&1 | tee -a "$DIAG"
-          cd "$WS"
-          if [ -f "$WS/mbwork/new.img" ]; then
-            rm -rf pack_magisk; mkdir -p pack_magisk
-            cp mbwork/new.img pack_magisk/recovery.img
-            ( cd pack_magisk && tar -H ustar -c recovery.img > "$WS/output/twrp_magisk.tar" )
-            sz=$(stat -c%s "$WS/mbwork/new.img")
-            flag="OK"; [ "$sz" -gt "$PART_SIZE" ] && flag="*** TOO BIG ***"
-            echo "  -> output/twrp_magisk.tar  image=$sz bytes  $flag" | tee -a "$DIAG"
-          else
-            echo "[fail] magiskboot repack produced nothing" | tee -a "$DIAG"
-          fi
+          build_variant ctrl        raw        perm "$PART_R"
+          build_variant stockmatch  stockmatch perm "$PART_R"
+          build_variant gzip        gzip       perm "$PART_R"
+          build_variant lz4         lz4        perm "$PART_R"
+          build_variant raw         raw        perm "$PART_R"
+          mb_variant   magiskboot
 
           cp "$DIAG" "$WS/output/diag.txt"
           echo "=== FINAL OUTPUT ==="; ls -l output/
