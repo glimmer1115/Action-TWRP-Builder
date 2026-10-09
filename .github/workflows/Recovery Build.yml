@@ -35,14 +35,15 @@ jobs:
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
-            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libncurses5 libncurses5:i386 libtinfo5 libsdl1.2-dev \
+            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libncurses5 libtinfo5 libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
-            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 tar android-sdk-libsparse-utils || true
+            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python2 python2-dev python-is-python2 tar android-sdk-libsparse-utils || true
             
-        # libncurses.so.5 심볼릭 링크 강제 생성 (Ubuntu 호환성 확보)
-        sudo apt-get install -y libncurses5 libtinfo5 || true
-        sudo ln -s /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
-        sudo ln -s /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
+        # 심볼릭 링크 및 Python2 기본 설정
+        sudo apt-get install -y libncurses5 libtinfo5 python2 || true
+        sudo ln -sf /usr/bin/python2 /usr/bin/python || true
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
     - name: Install OpenJDK
       uses: actions/setup-java@v5
@@ -130,6 +131,9 @@ jobs:
     - name: Building recovery & Magiskboot Repackaging
       run: |
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
+        
+        # Python 2 print 문법 스크립트 강제 우회 패치
+        sed -i 's/print "\(.*\)"/print("\1")/g' build/tools/check_radio_versions.py || true
         
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
