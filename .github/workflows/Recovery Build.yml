@@ -39,7 +39,7 @@ jobs:
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils \
             bison flex m4 || true
-            sudo ln -sf /usr/bin/python3 /usr/bin/python || true
+        sudo ln -sf /usr/bin/python3 /usr/bin/python || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
     - name: Install OpenJDK
@@ -70,7 +70,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
     - name: Repo Sync
       run: |
         repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
@@ -105,14 +105,12 @@ jobs:
         echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "BOARD_AVB_ENAB	LE := false" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "BOARD_BUILD_	DISABLED_VBMETAIMAGE := true" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "BOARD_AVB_ENABLE := false" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "BOARD_BUILD_DISABLED_VBMETAIMAGE := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_INCLUDE_CRYPTO := false" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        
-        # [수정] 커널 이미지 이름을 지정하여 빌드 시스템이 이 파일을 찾게 함
         echo "BOARD_KERNEL_IMAGE_NAME := kernel" >> ./$REAL_D_PATH/BoardConfig.mk
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
     - name: Set Swap Space
@@ -142,16 +140,13 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         lunch omni_gtaxladwifikx-eng
         
-        # [수정] 매우 중요: 빌드 에러(ninja error)를 방지하기 위해 더미 커널 파일 생성
-        # build.img를 생성할 때 필요한 kernel 파일을 강제로 만들어 줍니다.
+        # 빌드 에러 방지를 위한 더미 파일 생성
         mkdir -p out/target/product/gtaxladwifikx
         touch out/target/product/gtaxladwifikx/kernel
-        
         mkdir -p out/target/product/gtaxladwifikx/system/bin
         touch out/target/product/gtaxladwifikx/system/bin/linker
         touch out/target/product/gtaxladwifikx/system/bin/linker64
         
-        # 이제 커널 파일이 존재하므로 ninja error 없이 ramdisk-recovery.cpio까지 빌드됩니다.
         make recoveryimage -j$(nproc --all)
         
         # 4. 후처리 및 리패키징
@@ -172,7 +167,6 @@ jobs:
           ../magiskboot unpack ../stock_recovery.img
           if [ -f ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
             cp ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ramdisk.cpio
-            # 여기서 순정 커널 + 빌드된 램디스크가 결합되어 진짜 recovery.img가 생성됩니다.
             ../magiskboot repack ../stock_recovery.img ../output/recovery.img
           else
             echo "Error: ramdisk-recovery.cpio not found."
