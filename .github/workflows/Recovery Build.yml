@@ -74,7 +74,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
 
     - name: Repo Sync
       run: |
@@ -188,11 +188,11 @@ jobs:
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: output/*
         name: sm-t583-twrp-unlocked-build
         tag_name: ${{ github.run_id }}
         body: |
           삼성 갤럭시 탭 Advanced2 (SM-T583) Magiskboot 커널/dtb 재합성 TWRP 빌드 완료.
-      env:
-        GITHUB_
