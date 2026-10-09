@@ -164,24 +164,20 @@ jobs:
       - name: Surgical Patch Ramdisk (The Last Hope)
         working-directory: workspace
         run: |
-          # 경로 정의
           PROD_DIR=$(ls -d out/target/product/*/ | head -n1)
           FIX_BASE="$PWD/ramdisk_fix"
           UNPACK_DIR="$FIX_BASE/unpack"
           mkdir -p "$UNPACK_DIR"
           
-          # 1. TWRP Ramdisk 추출
           RD_FILE=""
           for f in "$PROD_DIR"ramdisk-recovery.img "$PROD_DIR"ramdisk-recovery.cpio.gz "$PROD_DIR"ramdisk-recovery.cpio; do
             if [ -f "$f" ]; then RD_FILE="$f"; break; fi
           done
           
           if [ -z "$RD_FILE" ]; then
-            echo "Finding ramdisk in recovery/root..."
             (cd "$PROD_DIR"recovery/root && find . | cpio -o -H newc | gzip -6 > "$FIX_BASE/twrp_rd.gz")
             RD_CPIO="$FIX_BASE/twrp_rd.gz"
           else
-            # gzip 여부 확인 및 해제
             if [[ "$RD_FILE" == *.gz ]] || file "$RD_FILE" | grep -q "gzip"; then
               zcat "$RD_FILE" > "$FIX_BASE/rd.cpio"
             else
@@ -190,7 +186,6 @@ jobs:
             RD_CPIO="$FIX_BASE/rd.cpio"
           fi
           
-          # 2. 압축 해제 (절대 경로 사용)
           if [ -f "$RD_CPIO" ]; then
             if [[ "$RD_CPIO" == *.gz ]]; then
               zcat "$RD_CPIO" | (cd "$UNPACK_DIR" && cpio -idmv)
@@ -199,30 +194,17 @@ jobs:
             fi
           fi
           
-          # 3. [초정밀 수술] init.rc 및 default.prop
           if [ -f "$UNPACK_DIR/init.rc" ]; then
-            echo "Applying Hardened Patch to init.rc..."
-            # 모든 early-init을 init으로 변경 (8.0 커널 호환)
             sed -i 's/on early-init/on init/g' "$UNPACK_DIR/init.rc"
-            # 부팅 시 충돌 가능성이 매우 높은 서비스들 강제 비활성화
             sed -i 's/service vold/service vold disabled/g' "$UNPACK_DIR/init.rc"
             sed -i 's/service adbd/service adbd disabled/g' "$UNPACK_DIR/init.rc"
             sed -i 's/service surfaceflinger/service surfaceflinger disabled/g' "$UNPACK_DIR/init.rc"
           fi
           
           if [ -f "$UNPACK_DIR/default.prop" ]; then
-            echo "Hardening default.prop..."
-            # SELinux 완전 무력화 및 디버깅 허용
-            cat >> "$UNPACK_DIR/default.prop" <<EOF
-ro.debuggable=1
-ro.secure=0
-smack.default_hat=0
-androidboot.selinux=permissive
-persist.sys.usb.config=mtp
-EOF
+            printf "ro.debuggable=1\nro.secure=0\nsmack.default_hat=0\nandroidboot.selinux=permissive\npersist.sys.usb.config=mtp\n" >> "$UNPACK_DIR/default.prop"
           fi
           
-          # 4. 다시 묶기
           (cd "$UNPACK_DIR" && find . | cpio -o -H newc | gzip -6 > "$FIX_BASE/twrp_patched_rd.gz")
           cp "$FIX_BASE/twrp_patched_rd.gz" "$PROD_DIR"ramdisk-recovery.img.patched
 
@@ -246,7 +228,6 @@ EOF
           cmdline = data[64:576]
           idv = data[576:608]
           extra = data[608:1632]
-          
           pos = p_size
           kernel = data[pos:pos + k_size]
           pos += k_size + pad(k_size, p_size)
@@ -255,29 +236,24 @@ EOF
           second = data[pos:pos + s_size]
           pos += s_size + pad(s_size, p_size)
           dt = data[pos:pos + v40] if v40 > 4 else b""
-
           cmd_str = cmdline.split(b"\0")[0].decode("latin1")
           extra_str = extra.split(b"\0")[0].decode("latin1")
-          
           if rd_path == "-":
               new_rd = ramdisk
           else:
               new_rd = open(rd_path, "rb").read()
               if new_rd[:2] != b"\x1f\x8b":
                   new_rd = gzip.compress(new_rd, 6)
-
           if extra_cmd:
               if len(cmd_str) + len(extra_cmd) < 511:
                   cmd_str = (cmd_str + " " + extra_cmd).strip()
               else:
                   extra_str = (extra_str + " " + extra_cmd).strip()
-
           sha = hashlib.sha1()
           for b in (kernel, new_rd, second):
               sha.update(b); sha.update(struct.pack("<I", len(b)))
           if dt: sha.update(dt); sha.update(struct.pack("<I", len(dt)))
           new_id = sha.digest().ljust(32, b"\0")
-
           hdr = struct.pack("<8s10I16s512s32s1024s", b"ANDROID!", k_size, k_addr, len(new_rd), r_addr, s_size, s_addr, t_addr, p_size, v40, os_v, name, cmd_str.encode("latin1"), new_id, extra_str.encode("latin1"))
           out = bytearray(hdr)
           out += b"\0" * pad(len(out), p_size)
