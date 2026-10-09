@@ -9,7 +9,7 @@ on:
       MANIFEST_BRANCH:
         description: 'MANIFEST_BRANCH'
         required: false
-		DEVICE_TREE_URL:
+      DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: false
       DEVICE_TREE_BRANCH:
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    step		s:
+    steps:
     - name: Check Out
       uses: actions/checkout@v4
 
@@ -101,97 +101,3 @@ jobs:
         echo "PRODUCT_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
-        
-        # BoardConfig.mk 설정
-        echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_2ND_ARCH := arm" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_2ND_ARCH_VARIANT := armv7-a-neon" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_2ND_CPU_ABI := armeabi-v7a" >> ./$REAL_D_PATH/BoardConfig.mk
-        
-        echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "BOARD_AVB_ENABLE := false" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_INCLUDE_CRYPTO := false" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
-
-    - name: Building recovery & Magiskboot Repackaging
-      run: |
-        # prebuilts 디렉터리 생성
-        mkdir -p prebuilts/misc/linux-x86/bison
-        mkdir -p prebuilts/misc/linux-x86/flex
-        mkdir -p prebuilts/build-tools/path/linux-x86
-        mkdir -p prebuilts/build-tools/linux-x86/bin
-
-        # Android 8.1 호환 Bison 2.7 바이너리 다운로드 및 강제 교체 (checkpolicy 에러 해결)
-        wget -q https://raw.githubusercontent.com/LineageOS/android_prebuilts_build-tools/lineage-17.1/linux-x86/bin/bison -O prebuilts/build-tools/linux-x86/bin/bison
-        chmod +x prebuilts/build-tools/linux-x86/bin/bison
-
-        FLEX_BIN=$(which flex)
-        M4_BIN=$(which m4)
-
-        ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/misc/linux-x86/bison/bison
-        ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/build-tools/path/linux-x86/bison
-        ln -sf $FLEX_BIN prebuilts/misc/linux-x86/flex/flex || true
-        ln -sf $FLEX_BIN prebuilts/build-tools/path/linux-x86/flex || true
-        ln -sf $FLEX_BIN prebuilts/build-tools/linux-x86/bin/flex || true
-        ln -sf $M4_BIN prebuilts/build-tools/linux-x86/bin/m4 || true
-
-        # Python 2 -> Python 3 호환성 일괄 패치
-        find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
-        
-        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
-        sed -i 's/print "\(.*\)"/print("\1")/g' build/tools/check_radio_versions.py || true
-        
-        # fingerprint 길이 제한 패치
-        sed -i 's/91/128/g' build/tools/post_process_props.py || true
-        
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        export BUILD_NUMBER="1"
-        export M4="$M4_BIN"
-        
-        lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
-        
-        mkdir -p out/target/product/gtaxladwifikx/system/bin
-        touch out/target/product/gtaxladwifikx/system/bin/linker
-        touch out/target/product/gtaxladwifikx/system/bin/linker64
-        touch out/target/product/gtaxladwifikx/kernel
-        
-        make recoveryimage -j$(nproc --all)
-        
-        mkdir -p ../output
-        
-        wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
-        unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
-        mv libmagiskboot.so magiskboot
-        chmod +x magiskboot
-        
-        if [ -f ../recovery.img ]; then
-          echo "순정 recovery.img 언팩 중..."
-          mkdir stock_rec && cd stock_rec
-          ../../magiskboot unpack ../../recovery.img
-          cd ..
-          
-          if [ -f out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
-            echo "TWRP ramdisk를 순정 커널/dtb와 정교하게 재합성합니다."
-            cp out/target/product/gtaxladwifikx/ramdisk-recovery.cpio stock_rec/ramdisk.cpio
-            cd stock_rec
-            ../magiskboot repack ../../recovery.img ../../output/recovery.img
-            cd ..
-          fi
-        elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
-          cp -v out/target/product/gt
