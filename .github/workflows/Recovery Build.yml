@@ -26,8 +26,10 @@ jobs:
     steps:
     - name: Check Out
       uses: actions/checkout@v4
+
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
+
     - name: Prepare the environment
       run: |
         sudo apt update && sudo apt upgrade -y
@@ -43,15 +45,18 @@ jobs:
         sudo ln -sf /usr/bin/python3 /usr/bin/python || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
+
     - name: Install OpenJDK
       uses: actions/setup-java@v5
       with:
         distribution: 'zulu'
         java-version: '8'
+
     - name: Install repo
       run: |
         sudo apt-get update
         sudo apt-get install -y repo
+
     - name: Initialize repo
       id: pwd
       run: |
@@ -72,9 +77,11 @@ jobs:
         
         repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+
     - name: Repo Sync
       run: repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
       working-directory: workspace
+
     - name: Configure Device Tree
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
@@ -111,14 +118,15 @@ jobs:
         echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        # 중요: 커널 빌드를 하지 않고 외부 파일을 사용하도록 설정
         echo "BOARD_KERNEL_IMAGE_NAME := kernel" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_KERNEL_SOURCE := " >> ./$REAL_D_PATH/BoardConfig.mk
       working-directory: workspace
+
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
+
     - name: Building recovery & Repackaging
       run: |
         # 1. 기본 도구 준비
@@ -129,7 +137,7 @@ jobs:
         ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
         ln -sf $(which m4) prebuilts/build-tools/linux-x86/bin/m4 || true
         
-        # 2. magiskboot 준비 및 커널 추출 (핵심 수정 부분)
+        # 2. magiskboot 준비 및 커널 추출
         wget https://github.com/cfsa/magiskboot-bin/raw/master/magiskboot
         chmod +x magiskboot
         
@@ -139,12 +147,11 @@ jobs:
           echo "Extracting kernel from stock recovery..."
           mkdir stock_unpack && cd stock_unpack
           ../magiskboot unpack ../stock_recovery.img
-          # 추출된 kernel 파일을 빌드 시스템이 찾을 수 있는 위치로 복사
           mkdir -p ../out/target/product/gtaxladwifikx/
           cp kernel ../out/target/product/gtaxladwifikx/kernel
           cd ..
         else
-          echo "Error: STOCK_RECOVERY_URL is required to extract the kernel."
+          echo "Error: STOCK_RECOVERY_URL is required."
           exit 1
         fi
 
@@ -165,12 +172,11 @@ jobs:
           sed -i 's/sys.exit(1)/pass/g' build/tools/post_process_props.py
         fi
         
-        # 5. 빌드 실행 (recoveryimage만 빌드)
-        # 커널이 이미 out 폴더에 있으므로 ninja가 에러를 내지 않고 진행함
+        # 5. 빌드 실행
         make recoveryimage -j$(nproc)
         
-        # 6. 리패키징
-        mkdir -p ../output
+        # 6. 리패키징 (경로 수정: ../output -> output)
+        mkdir -p output
         if [ -f out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
           echo "Starting repackaging..."
           mkdir repack_work && cd repack_work
@@ -179,28 +185,30 @@ jobs:
           ../magiskboot repack ../stock_recovery.img ../output/recovery.img
           cd ..
         elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
-          cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
+          cp -v out/target/product/gtaxladwifikx/recovery.img output/
         else
           echo "Error: Recovery image not found."
           exit 1
         fi
         
-        cd ../output
+        cd output
         dd if=/dev/zero of=vbmeta.img bs=256 count=1
         if [ -f recovery.img ]; then
           tar -cf twrp_smt583_avb_disabled.tar recovery.img vbmeta.img
         fi
         ls -la
       working-directory: workspace
+
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: twrp-smt583-unlocked
-        path: output/*
+        path: workspace/output/*
+
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: output/*
-        name: sm-t583
+        files: workspace/output/*
+        name: "SM-T583 TWRP Recovery"
