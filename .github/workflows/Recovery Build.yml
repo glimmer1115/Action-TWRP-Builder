@@ -1,5 +1,4 @@
 name: Recovery Build
-
 on:
   workflow_dispatch:
     inputs:
@@ -14,6 +13,9 @@ on:
         required: false
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
+        required: false
+      STOCK_RECOVERY_URL:
+        description: '순정 recovery.img 다운로드 URL (필수 - 삼성 헤더 유지용)'
         required: false
 
 jobs:
@@ -40,7 +42,6 @@ jobs:
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils \
             bison flex m4 || true
             
-        # 심볼릭 링크 강제 연결 (python 및 libncurses5)
         sudo ln -sf /usr/bin/python3 /usr/bin/python || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
@@ -82,7 +83,7 @@ jobs:
         repo sync -c -j4 --force-sync --no-clone-bundle --no-tags
       working-directory: workspace
 
-    - name: Configure Device Tree (SM-T583 / gtaxladwifikx)
+    - name: Configure Device Tree
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
         REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
@@ -93,16 +94,14 @@ jobs:
         fi
         
         mkdir -p ./$REAL_D_PATH
-        
         echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_gtaxladwifikx.mk" > ./$REAL_D_PATH/AndroidProducts.mk
-        
         echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)" > ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_NAME := omni_gtaxladwifikx" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         
-        # BoardConfig.mk 설정 (AVB 검증 우회 구성을 강제 반영)
+        # BoardConfig.mk - AVB 및 삼성 특화 설정 강화
         echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
@@ -111,13 +110,10 @@ jobs:
         echo "TARGET_2ND_ARCH := arm" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_2ND_ARCH_VARIANT := armv7-a-neon" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_2ND_CPU_ABI := armeabi-v7a" >> ./$REAL_D_PATH/BoardConfig.mk
-        
         echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
-        
-        # AVB 및 보안 블록 해제 설정
         echo "BOARD_AVB_ENABLE := false" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "BOARD_BUILD_DISABLED_VBMETAIMAGE := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_INCLUDE_CRYPTO := false" >> ./$REAL_D_PATH/BoardConfig.mk
@@ -133,80 +129,70 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
-        # prebuilts 디렉터리 생성
-        mkdir -p prebuilts/misc/linux-x86/bison
-        mkdir -p prebuilts/misc/linux-x86/flex
-        mkdir -p prebuilts/build-tools/path/linux-x86
-        mkdir -p prebuilts/build-tools/linux-x86/bin
-
-        # Android 8.1 호환 Bison 2.7 바이너리 다운로드 및 강제 교체
+        # Prebuilts 설정
+        mkdir -p prebuilts/misc/linux-x86/bison prebuilts/misc/linux-x86/flex prebuilts/build-tools/linux-x86/bin
         wget -q https://raw.githubusercontent.com/LineageOS/android_prebuilts_build-tools/lineage-17.1/linux-x86/bin/bison -O prebuilts/build-tools/linux-x86/bin/bison
         chmod +x prebuilts/build-tools/linux-x86/bin/bison
-
-        FLEX_BIN=$(which flex)
-        M4_BIN=$(which m4)
-
         ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/misc/linux-x86/bison/bison
-        ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/build-tools/path/linux-x86/bison
-        ln -sf $FLEX_BIN prebuilts/misc/linux-x86/flex/flex || true
-        ln -sf $FLEX_BIN prebuilts/build-tools/path/linux-x86/flex || true
-        ln -sf $FLEX_BIN prebuilts/build-tools/linux-x86/bin/flex || true
-        ln -sf $M4_BIN prebuilts/build-tools/linux-x86/bin/m4 || true
+        ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
+        ln -sf $(which m4) prebuilts/build-tools/linux-x86/bin/m4 || true
 
-        # Python 2 -> Python 3 호환성 패치
+        # Python 3 호환성 패치
         find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
-        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
-        sed -i 's/print "\(.*\)"/print("\1")/g' build/tools/check_radio_versions.py || true
-        sed -i 's/91/128/g' build/tools/post_process_props.py || true
         
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
-        export BUILD_NUMBER="1"
-        export M4="$M4_BIN"
+        lunch omni_gtaxladwifikx-eng
         
-        lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
-        
+        # 더미 파일 생성 (빌드 에러 방지)
         mkdir -p out/target/product/gtaxladwifikx/system/bin
         touch out/target/product/gtaxladwifikx/system/bin/linker
         touch out/target/product/gtaxladwifikx/system/bin/linker64
-        touch out/target/product/gtaxladwifikx/kernel
         
         make recoveryimage -j$(nproc --all)
         
+        # 출력 디렉토리 생성
         mkdir -p ../output
         
-        # Magiskboot 준비
+        # Magiskboot 및 순정 이미지 준비
         wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
         unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
         mv libmagiskboot.so magiskboot
         chmod +x magiskboot
         
-        if [ -f ../recovery.img ]; then
-          echo "순정 recovery.img 언팩 중..."
+        # 순정 리커버리 다운로드 (입력값이 있을 때만)
+        STOCK_URL="${{ github.event.inputs.STOCK_RECOVERY_URL }}"
+        if [ -n "$STOCK_URL" ]; then
+          wget $STOCK_URL -O stock_recovery.img
+        fi
+
+        if [ -f stock_recovery.img ]; then
+          echo "순정 recovery.img를 사용하여 리패키징을 시작합니다..."
           mkdir stock_rec && cd stock_rec
-          ../../magiskboot unpack ../../recovery.img
-          cd ..
+          ../magiskboot unpack ../stock_recovery.img
           
-          if [ -f out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
-            echo "TWRP ramdisk를 순정 커널/dtb와 정교하게 재합성합니다."
-            cp out/target/product/gtaxladwifikx/ramdisk-recovery.cpio stock_rec/ramdisk.cpio
-            cd stock_rec
-            ../magiskboot repack ../../recovery.img ../../output/recovery.img
-            cd ..
+          # 빌드된 TWRP 램디스크로 교체
+          if [ -f ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
+            cp ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ramdisk.cpio
+            ../magiskboot repack ../stock_recovery.img ../output/recovery.img
+            echo "리패키징 성공: 삼성 헤더가 유지되었습니다."
+          else
+            echo "에러: TWRP 램디스크를 찾을 수 없습니다."
+            exit 1
           fi
+          cd ..
         elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
+          echo "경고: 순정 이미지가 없어 단순 복사를 수행합니다. (부팅 실패 확률 높음)"
           cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
         fi
 
-        # 오딘 AVB 검증 우회용 Empty vbmeta.img 생성 (256바이트 빈 헤더)
+        # vbmeta.img 생성 (AVB 우회)
         cd ../output
         dd if=/dev/zero of=vbmeta.img bs=256 count=1
         
-        # recovery.img와 vbmeta.img를 하나의 Odin Tar 파일로 묶음
         if [ -f recovery.img ]; then
           tar -cf twrp_smt583_avb_disabled.tar recovery.img vbmeta.img
         fi
-        
         ls -la
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
