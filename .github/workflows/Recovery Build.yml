@@ -130,7 +130,7 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
-        # prebuilts 바이너리 링크 설정
+        # prebuilts 디렉터리 생성 및 시스템 도구 링크
         BISON_BIN=$(which bison)
         FLEX_BIN=$(which flex)
         M4_BIN=$(which m4)
@@ -148,9 +148,11 @@ jobs:
         ln -sf $FLEX_BIN prebuilts/build-tools/linux-x86/bin/flex || true
         ln -sf $M4_BIN prebuilts/build-tools/linux-x86/bin/m4 || true
 
-        # checkpolicy bison 3.x 호환성 패치 (policy_parse.h 생성 미작동 방지)
-        sed -i 's/%name-prefix=/%name-prefix "/g' external/selinux/checkpolicy/policy_parse.y || true
-        sed -i 's/policy_yy/policy_yy"/g' external/selinux/checkpolicy/policy_parse.y || true
+        # checkpolicy bison 3.8+ 정교화 패치 (policy_parse.h/c 정상 생성 보장)
+        sed -i 's/%name-prefix=\(" policy_yy"\|"policy_yy"\|policy_yy\)/%name-prefix "policy_yy"/g' external/selinux/checkpolicy/policy_parse.y || true
+        sed -i 's/%define api.prefix {policy_yy}/%name-prefix "policy_yy"/g' external/selinux/checkpolicy/policy_parse.y || true
+        sed -i 's/YYPARSE_PARAM//* YYPARSE_PARAM *//g' external/selinux/checkpolicy/policy_parse.y || true
+        sed -i 's/YYLEX_PARAM//* YYLEX_PARAM *//g' external/selinux/checkpolicy/policy_parse.y || true
 
         # Python 2 -> Python 3 호환성 일괄 패치
         find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
@@ -179,7 +181,7 @@ jobs:
         
         wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
         unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
-        mv libmagiskboot.so magiskboot
+        mv libmagisk	boot.so magiskboot
         chmod +x magiskboot
         
         if [ -f ../recovery.img ]; then
@@ -193,8 +195,8 @@ jobs:
             cp out/target/product/gtaxladwifikx/ramdisk-recovery.cpio stock_rec/ramdisk.cpio
             cd stock_rec
             ../magiskboot repack ../../recovery.img ../../output/recovery.img
-            cd ..
-          fi
+            cd .	.
+          fi	
         elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
           cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
         fi
