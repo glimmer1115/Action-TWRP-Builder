@@ -17,7 +17,6 @@ on:
       STOCK_RECOVERY_URL:
         description: '순정 recovery.img 다운로드 URL (필수)'
         required: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,14 +25,12 @@ jobs:
     steps:
     - name: Check Out
       uses: actions/checkout@v4
-
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
-
     - name: Prepare the environment
       run: |
         sudo apt update && sudo apt upgrade -y
-        # Android 8.1 빌드를 위해 구버전 라이브러리 및 필수 도구 설치
+        # Android 8.1 빌드를 위해 구버전 라이브러리 및 필수 도구 설치 (2to3 추가)
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
@@ -41,24 +38,21 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libncurses5 libtinfo5 libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils \
-            bison flex m4 2to3 || true
+            bison flex m4 2to3 python3-2to3 || true
         
-        # 심볼릭 링크 설정 (버전 호환성 해결)
+        # 심볼릭 링크 설정
         sudo ln -sf /usr/bin/python3 /usr/bin/python || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
-
     - name: Install OpenJDK
       uses: actions/setup-java@v5
       with:
         distribution: 'zulu'
         java-version: '8'
-
     - name: Install repo
       run: |
         sudo apt-get update
         sudo apt-get install -y repo
-
     - name: Initialize repo
       id: pwd
       run: |
@@ -79,11 +73,9 @@ jobs:
         
         repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
-
     - name: Repo Sync
       run: repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
       working-directory: workspace
-
     - name: Configure Device Tree
       run: |
         REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
@@ -122,15 +114,13 @@ jobs:
         echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "BOARD_KERNEL_IMAGE_NAME := kernel" >> ./$REAL_D_PATH/BoardConfig.mk
       working-directory: workspace
-
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-
     - name: Building recovery & Repackaging
       run: |
-        # 1. 빌드 도구 경로 및 호환성 강제 설정
+        # 1. 빌드 도구 경로 설정
         mkdir -p prebuilts/misc/linux-x86/bison prebuilts/misc/linux-x86/flex prebuilts/build-tools/linux-x86/bin
         wget -q https://raw.githubusercontent.com/LineageOS/android_prebuilts_build-tools/lineage-17.1/linux-x86/bin/bison -O prebuilts/build-tools/linux-x86/bin/bison
         chmod +x prebuilts/build-tools/linux-x86/bin/bison
@@ -138,10 +128,15 @@ jobs:
         ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
         ln -sf $(which m4) prebuilts/build-tools/linux-x86/bin/m4 || true
         
-        # 2. Python 3 호환성 패치 (에러 발생 지점 해결)
+        # 2. Python 3 호환성 패치 (강화 버전)
         echo "Applying Python compatibility patches..."
+        # .iteritems() -> .items() 변환
         find . -type f -name "*.py" -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
+        # print 문 변환
         find . -type f -name "*.py" -exec sed -i -E 's/^([[:space:]]*)print[[:space:]]+([^(\n]*)$/\1print(\2)/g' {} + || true
+        # [추가] except ExceptionA, ExceptionB: -> except (ExceptionA, ExceptionB): 변환 (SyntaxError 해결)
+        find . -type f -name "*.py" -exec sed -i -E 's/(except[[:space:]]+)([a-zA-Z0-9_.]+),[[:space:]]*([a-zA-Z0-9_.]+):/\1(\2, \3):/g' {} + || true
+        # 2to3 실행 (이제 설치되었으므로 작동함)
         find . -type f -name "*.py" -exec 2to3 -w -n {} + || true
         
         # 3. 빌드 환경 설정
@@ -149,19 +144,17 @@ jobs:
         export ALLOW_MISSING_DEPENDENCIES=true
         lunch omni_gtaxladwifikx-eng
         
-        # [중요] 핑거프린트 길이 및 속성 체크 완전 무력화
-        # 에러가 발생하는 'if len(fingerprint) > 91' 로직 자체를 거짓으로 만듭니다.
+        # 핑거프린트 길이 체크 무력화
         if [ -f build/tools/post_process_props.py ]; then
           sed -i 's/if len(fingerprint) > 91:/if False:/g' build/tools/post_process_props.py
           sed -i 's/sys.exit(1)/pass/g' build/tools/post_process_props.py
         fi
         
-        # 4. 빌드 실행 (메모리 부족 방지를 위해 -j$(nproc) 사용)
+        # 4. 빌드 실행
         make recoveryimage -j$(nproc)
         
         # 5. 후처리 및 리패키징
         mkdir -p ../output
-        # magiskboot 바이너리 직접 다운로드 (APK에서 추출하는 것보다 확실함)
         wget https://github.com/cfsa/magiskboot-bin/raw/master/magiskboot
         chmod +x magiskboot
         
@@ -193,13 +186,11 @@ jobs:
         fi
         ls -la
       working-directory: workspace
-
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: twrp-smt583-unlocked
         path: output/*
-
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       env:
