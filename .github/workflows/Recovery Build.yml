@@ -130,7 +130,7 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
-        # prebuilts 모듈 경로 복구 및 심볼릭 링크 생성
+        # prebuilts 바이너리 링크 설정
         BISON_BIN=$(which bison)
         FLEX_BIN=$(which flex)
         M4_BIN=$(which m4)
@@ -140,13 +140,17 @@ jobs:
         mkdir -p prebuilts/build-tools/path/linux-x86
         mkdir -p prebuilts/build-tools/linux-x86/bin
         
-        cp -sf $BISON_BIN prebuilts/misc/linux-x86/bison/bison || true
-        cp -sf $FLEX_BIN prebuilts/misc/linux-x86/flex/flex || true
-        cp -sf $BISON_BIN prebuilts/build-tools/path/linux-x86/bison || true
-        cp -sf $FLEX_BIN prebuilts/build-tools/path/linux-x86/flex || true
-        cp -sf $BISON_BIN prebuilts/build-tools/linux-x86/bin/bison || true
-        cp -sf $FLEX_BIN prebuilts/build-tools/linux-x86/bin/flex || true
-        cp -sf $M4_BIN prebuilts/build-tools/linux-x86/bin/m4 || true
+        ln -sf $BISON_BIN prebuilts/misc/linux-x86/bison/bison || true
+        ln -sf $FLEX_BIN prebuilts/misc/linux-x86/flex/flex || true
+        ln -sf $BISON_BIN prebuilts/build-tools/path/linux-x86/bison || true
+        ln -sf $FLEX_BIN prebuilts/build-tools/path/linux-x86/flex || true
+        ln -sf $BISON_BIN prebuilts/build-tools/linux-x86/bin/bison || true
+        ln -sf $FLEX_BIN prebuilts/build-tools/linux-x86/bin/flex || true
+        ln -sf $M4_BIN prebuilts/build-tools/linux-x86/bin/m4 || true
+
+        # checkpolicy bison 3.x 호환성 패치 (policy_parse.h 생성 미작동 방지)
+        sed -i 's/%name-prefix=/%name-prefix "/g' external/selinux/checkpolicy/policy_parse.y || true
+        sed -i 's/policy_yy/policy_yy"/g' external/selinux/checkpolicy/policy_parse.y || true
 
         # Python 2 -> Python 3 호환성 일괄 패치
         find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
