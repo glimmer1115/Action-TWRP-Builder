@@ -7,11 +7,11 @@ on:
         required: false
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
-        description: 'TWRP manifest branch'
+        description: 'TWRP manifest branch (8.0 펌웨어 기기라 twrp-8.1 권장, 안 되면 twrp-9.0)'
         required: false
-        default: 'twrp-6.0'
+        default: 'twrp-8.1'
       DEVICE_TREE_URL:
-        description: '디바이스 트리 git URL'
+        description: '디바이스 트리 git URL (필수)'
         required: true
       DEVICE_TREE_BRANCH:
         description: '디바이스 트리 브랜치'
@@ -22,19 +22,19 @@ on:
         required: false
         default: 'gtaxlwifi'
       CODENAME_DST:
-        description: '내 기기 코드네임'
+        description: '내 기기 코드네임 (비우면 치환 안 함)'
         required: false
         default: ''
       LUNCH_TARGET:
-        description: 'lunch 대상'
+        description: 'lunch 대상 (비우면 트리에서 자동 탐지, 예: omni_gtaxlwifi-eng)'
         required: false
         default: ''
       STOCK_RECOVERY_URL:
-        description: '순정 recovery.img URL'
+        description: '순정 recovery.img URL (저장소 루트에 recovery.img 가 있으면 무시됨, 보통 비워둘 것)'
         required: false
         default: ''
       USE_STOCK_KERNEL:
-        description: '순정 recovery 의 kernel 을 강제 사용'
+        description: '순정 recovery 의 kernel 을 TARGET_PREBUILT_KERNEL 로 강제 사용'
         type: boolean
         required: false
         default: false
@@ -57,6 +57,7 @@ env:
 
 jobs:
   build:
+    # Android 8.1 빌드는 최신 24.04 보다 22.04 가 호환성이 좋다
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     permissions:
@@ -83,9 +84,14 @@ jobs:
             gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev lib32z1-dev lib32readline-dev \
             libncurses5 libncurses-dev libxml2-utils xsltproc libssl-dev squashfs-tools \
             schedtool pngcrush imagemagick python2 python3 android-sdk-libsparse-utils \
-            device-tree-compiler
+            device-tree-compiler cpio file
+
+          # Android 8.1 빌드 시스템은 python2 기준이다 (소스 파일을 sed 로 고치지 않는다)
           sudo update-alternatives --install /usr/bin/python python /usr/bin/python2 10
           sudo update-alternatives --set python /usr/bin/python2
+          python --version
+
+          # 구버전 호스트 바이너리용 심볼릭 링크
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
@@ -102,6 +108,13 @@ jobs:
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
+      - name: Validate inputs
+        run: |
+          if [ -z "$DEVICE_TREE_URL" ]; then
+            echo "::error::DEVICE_TREE_URL 이 필요합니다. 검증된 gtaxlwifi 계열 트리를 넣어주세요."
+            exit 1
+          fi
+
       - name: Initialize and sync repo
         run: |
           git config --global user.name "github-actions"
@@ -110,21 +123,46 @@ jobs:
           repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
           repo sync -c -j"$(nproc)" --force-sync --no-clone-bundle --no-tags
 
-      - name: Prepare stock recovery
+      - name: Prepare stock recovery (header info)
         run: |
           mkdir -p tools stock
+
+          # 1) 순정 recovery.img 확보: 저장소 루트 파일 우선, 없으면 URL
           if [ -f "$GITHUB_WORKSPACE/recovery.img" ]; then
+            echo "저장소 루트의 recovery.img 사용"
             cp "$GITHUB_WORKSPACE/recovery.img" stock/stock_recovery.img
           elif [ -n "$STOCK_RECOVERY_URL" ]; then
-            wget -nv "$STOCK_RECOVERY_URL" -O stock/stock_recovery.img
+            echo "URL 에서 다운로드: $STOCK_RECOVERY_URL"
+            if ! wget -nv "$STOCK_RECOVERY_URL" -O stock/stock_recovery.img; then
+              echo "::error::STOCK_RECOVERY_URL 다운로드 실패 (private 저장소이거나 주소가 틀림). 저장소 루트에 recovery.img 를 올리고 URL 칸은 비우세요."
+              exit 1
+            fi
           else
-            echo "::error::recovery.img missing"
+            echo "::error::recovery.img 가 저장소 루트에 없고 STOCK_RECOVERY_URL 도 비어 있습니다."
             exit 1
           fi
+
+          SIZE=$(stat -c %s stock/stock_recovery.img)
+          echo "stock recovery size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::recovery.img 가 비정상적으로 작습니다 (LFS 포인터이거나 잘못된 파일)."
+            head -c 300 stock/stock_recovery.img || true
+            exit 1
+          fi
+
+          # 2) magiskboot 준비 (Magisk APK 안에 들어 있음, 버전 고정)
           wget -nv https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O tools/magisk.apk
           unzip -j -o tools/magisk.apk 'lib/x86_64/libmagiskboot.so' -d tools
           mv tools/libmagiskboot.so tools/magiskboot
           chmod +x tools/magiskboot
+
+          # 3) 헤더 정보 출력 (실패해도 빌드는 계속)
+          cd stock
+          ../tools/magiskboot unpack -h stock_recovery.img || echo "magiskboot unpack 실패 (헤더 정보만 생략)"
+          echo "===== 순정 recovery 헤더 정보 (BoardConfig.mk 의 cmdline/base/pagesize 와 비교) ====="
+          cat header 2>/dev/null || true
+          echo "============================================================================"
+          ls -l
 
       - name: Configure Device Tree
         working-directory: workspace
@@ -132,10 +170,21 @@ jobs:
           TREE_NAME="${CODENAME_DST:-$CODENAME_SRC}"
           TREE_DIR="device/samsung/${TREE_NAME}"
           echo "TREE_DIR=$TREE_DIR" >> "$GITHUB_ENV"
+
           mkdir -p device/samsung
+          echo "===== 원격 저장소의 브랜치 목록 ====="
+          git ls-remote --heads "$DEVICE_TREE_URL" | sed 's#.*refs/heads/##' || true
+          echo "===================================="
+          if ! git ls-remote --exit-code --heads "$DEVICE_TREE_URL" "$DEVICE_TREE_BRANCH" >/dev/null 2>&1; then
+            echo "::error::브랜치 '$DEVICE_TREE_BRANCH' 가 없습니다. 위 목록에서 실제 브랜치명을 DEVICE_TREE_BRANCH 에 넣으세요."
+            exit 1
+          fi
           git clone --depth=1 "$DEVICE_TREE_URL" -b "$DEVICE_TREE_BRANCH" "$TREE_DIR"
           rm -rf "$TREE_DIR/.git"
+
+          # 코드네임 치환 (파일/폴더 이름 + 내용)
           if [ -n "$CODENAME_DST" ] && [ "$CODENAME_DST" != "$CODENAME_SRC" ]; then
+            echo "Renaming $CODENAME_SRC -> $CODENAME_DST"
             cd "$TREE_DIR"
             find . -depth -name "*${CODENAME_SRC}*" | while read -r p; do
               d=$(dirname "$p"); b=$(basename "$p")
@@ -144,69 +193,49 @@ jobs:
             grep -rIl -- "$CODENAME_SRC" . | xargs -r sed -i "s/${CODENAME_SRC}/${CODENAME_DST}/g"
             cd - >/dev/null
           fi
+
+          # lunch 대상 자동 탐지
           if [ -n "$LUNCH_TARGET_IN" ]; then
             LUNCH="$LUNCH_TARGET_IN"
           else
             MK=$(ls "$TREE_DIR"/omni_*.mk "$TREE_DIR"/twrp_*.mk 2>/dev/null | head -n1 || true)
+            if [ -z "$MK" ]; then
+              echo "::error::omni_*.mk / twrp_*.mk 를 트리에서 찾지 못했습니다. LUNCH_TARGET 을 직접 지정하세요."
+              ls -la "$TREE_DIR"
+              exit 1
+            fi
             LUNCH="$(basename "$MK" .mk)-eng"
           fi
           echo "LUNCH=$LUNCH" >> "$GITHUB_ENV"
+          echo "lunch target: $LUNCH"
+
+          # 순정 커널 강제 사용 (옵션)
+          if [ "$USE_STOCK_KERNEL" = "true" ]; then
+            mkdir -p "$TREE_DIR/prebuilt"
+            cp "$GITHUB_WORKSPACE/stock/kernel" "$TREE_DIR/prebuilt/kernel"
+            echo "TARGET_PREBUILT_KERNEL := $TREE_DIR/prebuilt/kernel" >> "$TREE_DIR/BoardConfig.mk"
+          fi
+
+          echo "===== BoardConfig.mk ====="
+          cat "$TREE_DIR/BoardConfig.mk"
 
       - name: Build recovery
         working-directory: workspace
         run: |
+          set +e
+          set +u
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
+          export WITH_DEXPREOPT=false
           source build/envsetup.sh
           lunch "$LUNCH"
           make -j"$(nproc)" recoveryimage 2>&1 | tee build.log
-
-      - name: Surgical Patch Ramdisk (The Last Hope)
-        working-directory: workspace
-        run: |
-          PROD_DIR=$(ls -d out/target/product/*/ | head -n1)
-          FIX_BASE="$PWD/ramdisk_fix"
-          UNPACK_DIR="$FIX_BASE/unpack"
-          mkdir -p "$UNPACK_DIR"
-          
-          RD_FILE=""
-          for f in "$PROD_DIR"ramdisk-recovery.img "$PROD_DIR"ramdisk-recovery.cpio.gz "$PROD_DIR"ramdisk-recovery.cpio; do
-            if [ -f "$f" ]; then RD_FILE="$f"; break; fi
-          done
-          
-          if [ -z "$RD_FILE" ]; then
-            (cd "$PROD_DIR"recovery/root && find . | cpio -o -H newc | gzip -6 > "$FIX_BASE/twrp_rd.gz")
-            RD_CPIO="$FIX_BASE/twrp_rd.gz"
-          else
-            if [[ "$RD_FILE" == *.gz ]] || file "$RD_FILE" | grep -q "gzip"; then
-              zcat "$RD_FILE" > "$FIX_BASE/rd.cpio"
-            else
-              cp "$RD_FILE" "$FIX_BASE/rd.cpio"
-            fi
-            RD_CPIO="$FIX_BASE/rd.cpio"
+          RC="${PIPESTATUS[0]}"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::recoveryimage 빌드 실패 (rc=$RC). 아래는 로그 마지막 50줄입니다."
+            tail -n 50 build.log
           fi
-          
-          if [ -f "$RD_CPIO" ]; then
-            if [[ "$RD_CPIO" == *.gz ]]; then
-              zcat "$RD_CPIO" | (cd "$UNPACK_DIR" && cpio -idmv)
-            else
-              (cd "$UNPACK_DIR" && cpio -idmv < "$RD_CPIO")
-            fi
-          fi
-          
-          if [ -f "$UNPACK_DIR/init.rc" ]; then
-            sed -i 's/on early-init/on init/g' "$UNPACK_DIR/init.rc"
-            sed -i 's/service vold/service vold disabled/g' "$UNPACK_DIR/init.rc"
-            sed -i 's/service adbd/service adbd disabled/g' "$UNPACK_DIR/init.rc"
-            sed -i 's/service surfaceflinger/service surfaceflinger disabled/g' "$UNPACK_DIR/init.rc"
-          fi
-          
-          if [ -f "$UNPACK_DIR/default.prop" ]; then
-            printf "ro.debuggable=1\nro.secure=0\nsmack.default_hat=0\nandroidboot.selinux=permissive\npersist.sys.usb.config=mtp\n" >> "$UNPACK_DIR/default.prop"
-          fi
-          
-          (cd "$UNPACK_DIR" && find . | cpio -o -H newc | gzip -6 > "$FIX_BASE/twrp_patched_rd.gz")
-          cp "$FIX_BASE/twrp_patched_rd.gz" "$PROD_DIR"ramdisk-recovery.img.patched
+          exit "$RC"
 
       - name: Package for Odin
         working-directory: workspace
@@ -214,80 +243,239 @@ jobs:
           WS="$PWD"
           IMG=$(ls out/target/product/*/recovery.img | head -n1)
           PROD_DIR=$(dirname "$IMG")
+          echo "built: $IMG"
+          echo "===== 빌드 산출물 목록 ====="
+          ls -la "$PROD_DIR" | head -n 60
           mkdir -p output
-          
+
+          # boot 이미지 ramdisk 교체용 순수 파이썬 스크립트 (magiskboot 에 의존하지 않음)
           cat > "$WS/repack.py" <<'PY'
-          import sys, struct, hashlib, gzip
-          def pad(n, p): return (-n) % p
+          #!/usr/bin/env python3
+          """boot/recovery 이미지(헤더 v0, 삼성 포함)에서 ramdisk 만 교체한다.
+          usage: repack.py <in.img> <out.img> <ramdisk.gz|-> [extra_cmdline]
+          ramdisk 가 '-' 이면 원본 ramdisk 를 그대로 사용한다 (대조군).
+          환경변수 DUMP_RD=<경로> 가 있으면 원본 ramdisk 를 그 경로에 저장한다 (진단용)."""
+          import os, sys, struct, hashlib, gzip
+
+          def pad(n, p):
+              return (-n) % p
+
           src, dst, rd_path = sys.argv[1:4]
           extra_cmd = sys.argv[4] if len(sys.argv) > 4 else ""
+
           data = open(src, "rb").read()
-          if data[:8] != b"ANDROID!": sys.exit("Not a boot image")
-          (k_size, k_addr, r_size, r_addr, s_size, s_addr, t_addr, p_size, v40, os_v) = struct.unpack_from("<10I", data, 8)
+          if data[:8] != b"ANDROID!":
+              sys.exit("ERROR: ANDROID! 매직이 없습니다 (boot image 가 아님)")
+
+          (kernel_size, kernel_addr, ramdisk_size, ramdisk_addr, second_size, second_addr,
+           tags_addr, page_size, v40, os_version) = struct.unpack_from("<10I", data, 8)
           name = data[48:64]
           cmdline = data[64:576]
           idv = data[576:608]
           extra = data[608:1632]
-          pos = p_size
-          kernel = data[pos:pos + k_size]
-          pos += k_size + pad(k_size, p_size)
-          ramdisk = data[pos:pos + r_size]
-          pos += r_size + pad(r_size, p_size)
-          second = data[pos:pos + s_size]
-          pos += s_size + pad(s_size, p_size)
-          dt = data[pos:pos + v40] if v40 > 4 else b""
+
+          header_version = v40 if v40 <= 4 else 0
+          dt_size = v40 if v40 > 4 else 0
+          if header_version >= 1:
+              sys.exit("ERROR: header_version=%d 는 지원하지 않습니다" % header_version)
+
+          pos = page_size
+          kernel = data[pos:pos + kernel_size]
+          pos += kernel_size + pad(kernel_size, page_size)
+          ramdisk = data[pos:pos + ramdisk_size]
+          pos += ramdisk_size + pad(ramdisk_size, page_size)
+          second = data[pos:pos + second_size]
+          pos += second_size + pad(second_size, page_size)
+          dt = data[pos:pos + dt_size]
+
+          if os.environ.get("DUMP_RD"):
+              open(os.environ["DUMP_RD"], "wb").write(ramdisk)
+
           cmd_str = cmdline.split(b"\0")[0].decode("latin1")
           extra_str = extra.split(b"\0")[0].decode("latin1")
+          print("== 원본 헤더 ==")
+          print("kernel_size=%d ramdisk_size=%d second_size=%d dt_size=%d page_size=%d" %
+                (kernel_size, ramdisk_size, second_size, dt_size, page_size))
+          print("kernel_addr=0x%x ramdisk_addr=0x%x tags_addr=0x%x os_version=0x%x" %
+                (kernel_addr, ramdisk_addr, tags_addr, os_version))
+          print("cmdline=" + cmd_str)
+          if extra_str:
+              print("extra_cmdline=" + extra_str)
+          print("ramdisk magic: " + ramdisk[:6].hex())
+
           if rd_path == "-":
               new_rd = ramdisk
           else:
               new_rd = open(rd_path, "rb").read()
               if new_rd[:2] != b"\x1f\x8b":
-                  new_rd = gzip.compress(new_rd, 6)
-          if extra_cmd:
-              if len(cmd_str) + len(extra_cmd) < 511:
+                  if new_rd[:6] == b"070701":
+                      new_rd = gzip.compress(new_rd, 9)
+                  else:
+                      sys.exit("ERROR: 알 수 없는 ramdisk 형식: " + new_rd[:6].hex())
+
+          if extra_cmd and extra_cmd not in cmd_str + " " + extra_str:
+              if len(cmd_str) + 1 + len(extra_cmd) <= 511:
                   cmd_str = (cmd_str + " " + extra_cmd).strip()
               else:
                   extra_str = (extra_str + " " + extra_cmd).strip()
+
           sha = hashlib.sha1()
-          for b in (kernel, new_rd, second):
-              sha.update(b); sha.update(struct.pack("<I", len(b)))
-          if dt: sha.update(dt); sha.update(struct.pack("<I", len(dt)))
+          for blob in (kernel, new_rd, second):
+              sha.update(blob)
+              sha.update(struct.pack("<I", len(blob)))
+          if dt_size:
+              sha.update(dt)
+              sha.update(struct.pack("<I", dt_size))
           new_id = sha.digest().ljust(32, b"\0")
-          hdr = struct.pack("<8s10I16s512s32s1024s", b"ANDROID!", k_size, k_addr, len(new_rd), r_addr, s_size, s_addr, t_addr, p_size, v40, os_v, name, cmd_str.encode("latin1"), new_id, extra_str.encode("latin1"))
+
+          hdr = struct.pack("<8s10I16s512s32s1024s", b"ANDROID!", kernel_size, kernel_addr,
+                            len(new_rd), ramdisk_addr, second_size, second_addr, tags_addr,
+                            page_size, v40, os_version, name,
+                            cmd_str.encode("latin1"), new_id, extra_str.encode("latin1"))
+
           out = bytearray(hdr)
-          out += b"\0" * pad(len(out), p_size)
-          for b in (kernel, new_rd, second, dt):
-              if b: out += b + b"\0" * pad(len(b), p_size)
+          out += b"\0" * pad(len(out), page_size)
+          for blob, present in ((kernel, True), (new_rd, True), (second, second_size > 0), (dt, dt_size > 0)):
+              if present:
+                  out += blob + b"\0" * pad(len(blob), page_size)
           out += b"SEANDROIDENFORCE"
           open(dst, "wb").write(out)
+
+          print("== 새 헤더 ==")
+          print("ramdisk_size=%d (원본 %d) 최종 크기=%d" % (len(new_rd), ramdisk_size, len(out)))
+          print("cmdline=" + cmd_str)
           PY
 
+          add_marker() {
+            if ! tail -c 16 "$1" | grep -q "SEANDROIDENFORCE"; then
+              printf 'SEANDROIDENFORCE' >> "$1"
+            fi
+          }
+
+          STOCK="$GITHUB_WORKSPACE/stock/stock_recovery.img"
+
+          # A) 트리가 만든 recovery.img 그대로 (native)
           mkdir -p pack_native
           cp "$IMG" pack_native/recovery.img
+          add_marker pack_native/recovery.img
           (cd pack_native && tar -H ustar -c recovery.img > ../output/twrp_native.tar)
           cp pack_native/recovery.img output/recovery_native.img
 
-          PATCHED_RD=$(ls out/target/product/*/ramdisk-recovery.img.patched | head -n1)
-          EXTRA_OPTS="androidboot.selinux=permissive wait_for_resume=0"
-          
-          if [ -n "$PATCHED_RD" ] && python3 "$WS/repack.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$WS/repack_out.img" "$PATCHED_RD" "$EXTRA_OPTS"; then
+          # TWRP ramdisk 찾기 (파일이 없으면 recovery/root 폴더에서 직접 만든다)
+          RD=""
+          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio" "$PROD_DIR/ramdisk-recovery.cpio.gz"; do
+            if [ -f "$f" ]; then RD="$f"; break; fi
+          done
+          if [ -z "$RD" ] && [ -d "$PROD_DIR/recovery/root" ]; then
+            echo "ramdisk 파일이 없어 recovery/root 에서 직접 생성합니다"
+            (cd "$PROD_DIR/recovery/root" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 > "$WS/twrp_ramdisk.gz")
+            RD="$WS/twrp_ramdisk.gz"
+          fi
+          echo "ramdisk 사용 파일: ${RD:-없음}"
+
+          # C) 대조군: 순정 ramdisk 를 그대로 다시 묶은 이미지 (TWRP 없음, 부팅되어야 정상)
+          #    이 호출에서 순정 ramdisk 원본도 stock_rd.bin 으로 덤프한다 (진단용)
+          if DUMP_RD="$WS/stock_rd.bin" python3 "$WS/repack.py" "$STOCK" "$WS/ctrl_out.img" "-"; then
+            mkdir -p pack_ctrl
+            cp ctrl_out.img pack_ctrl/recovery.img
+            (cd pack_ctrl && tar -H ustar -c recovery.img > ../output/ctrl_stock_repack.tar)
+          fi
+
+          # B1) 순정 커널/DT/헤더/cmdline 그대로 + TWRP ramdisk 만 교체 (cmdline 변수 제거)
+          if [ -n "$RD" ] && python3 "$WS/repack.py" "$STOCK" "$WS/repack_out.img" "$RD"; then
             mkdir -p pack_repack
             cp repack_out.img pack_repack/recovery.img
             (cd pack_repack && tar -H ustar -c recovery.img > ../output/twrp_repack.tar)
             cp pack_repack/recovery.img output/recovery_repack.img
+          else
+            echo "::warning::repack(B1) 실패. 위 로그를 확인하세요."
           fi
 
-          python3 "$WS/repack.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$WS/ctrl_out.img" "-" "$EXTRA_OPTS"
-          mkdir -p pack_ctrl
-          cp ctrl_out.img pack_ctrl/recovery.img
-          (cd pack_ctrl && tar -H ustar -c recovery.img > ../output/ctrl_stock_repack.tar)
+          # B2) B1 + androidboot.selinux=permissive (대조용: B1 과 B2 의 차이는 cmdline 뿐)
+          if [ -n "$RD" ] && python3 "$WS/repack.py" "$STOCK" "$WS/repack_perm_out.img" "$RD" "androidboot.selinux=permissive"; then
+            mkdir -p pack_repack_perm
+            cp repack_perm_out.img pack_repack_perm/recovery.img
+            (cd pack_repack_perm && tar -H ustar -c recovery.img > ../output/twrp_repack_permissive.tar)
+          else
+            echo "::warning::repack(B2) 실패. 위 로그를 확인하세요."
+          fi
+
+          echo "===== 크기 비교 ====="
+          echo "stock  : $(stat -c %s "$STOCK") bytes"
+          echo "native : $(stat -c %s output/recovery_native.img) bytes"
+          [ -f output/recovery_repack.img ] && echo "repack : $(stat -c %s output/recovery_repack.img) bytes"
+          [ -f pack_ctrl/recovery.img ] && echo "ctrl   : $(stat -c %s pack_ctrl/recovery.img) bytes"
+          [ -n "$RD" ] && echo "twrp ramdisk : $(stat -c %s "$RD") bytes"
+          [ -f "$WS/stock_rd.bin" ] && echo "stock ramdisk: $(stat -c %s "$WS/stock_rd.bin") bytes"
+
+          # ------------------------------------------------------------
+          # 진단: 순정 ramdisk 와 TWRP ramdisk 의 구조 차이를 로그/아티팩트로 남긴다
+          # (기기 로그 없이도 init / sepolicy / fstab 차이를 눈으로 비교하기 위함)
+          # ------------------------------------------------------------
+          DIAG="$WS/output/diag"
+          mkdir -p "$DIAG"
+
+          decomp() {
+            local m
+            m=$(head -c4 "$1" | od -An -tx1 | tr -d ' \n')
+            case "$m" in
+              1f8b*)    zcat "$1" ;;
+              02214c18) lz4 -dc "$1" ;;
+              303730*)  cat "$1" ;;
+              *) echo "알 수 없는 ramdisk 매직: $m" >&2; return 1 ;;
+            esac
+          }
+
+          dump_rd() {
+            local name="$1" f="$2" dir="$WS/diag_$1"
+            rm -rf "$dir"; mkdir -p "$dir"
+            if ! decomp "$f" > "$WS/diag_$name.cpio"; then
+              echo "[$name] ramdisk 압축 해제 실패"; return 0
+            fi
+            cpio -t < "$WS/diag_$name.cpio" 2>/dev/null | sort > "$DIAG/${name}_files.txt"
+            (cd "$dir" && cpio -idm --no-absolute-filenames < "$WS/diag_$name.cpio" >/dev/null 2>&1) || true
+
+            echo
+            echo "################ [$name] ################"
+            echo "파일 수: $(wc -l < "$DIAG/${name}_files.txt")"
+            echo "--- init 바이너리"
+            file "$dir/init" 2>/dev/null || echo "init 없음"
+            echo "--- 루트 항목"
+            ls -l "$dir" 2>/dev/null | head -n 60
+            echo "--- sepolicy / 정책 파일"
+            ls -l "$dir"/sepolicy "$dir"/plat_sepolicy* "$dir"/selinux_version "$dir"/file_contexts* 2>/dev/null || echo "(없음)"
+            echo "--- default.prop"
+            cat "$dir/default.prop" 2>/dev/null || echo "(없음)"
+            echo "--- init.rc import 목록"
+            grep -n '^import' "$dir"/init.rc 2>/dev/null || echo "(없음)"
+            echo "--- fstab 류"
+            ls -l "$dir"/*fstab* "$dir"/etc/*fstab* "$dir"/etc/recovery.fstab 2>/dev/null || echo "(없음)"
+            mkdir -p "$DIAG/${name}_rc"
+            cp "$dir"/*.rc "$dir"/default.prop "$dir"/etc/recovery.fstab "$DIAG/${name}_rc/" 2>/dev/null || true
+            rm -rf "$dir" "$WS/diag_$name.cpio"
+          }
+
+          if [ -f "$WS/stock_rd.bin" ]; then dump_rd stock "$WS/stock_rd.bin"; fi
+          if [ -n "$RD" ]; then dump_rd twrp "$RD"; fi
+
+          if [ -f "$DIAG/stock_files.txt" ] && [ -f "$DIAG/twrp_files.txt" ]; then
+            echo
+            echo "################ 파일 목록 차이 (< 순정만, > TWRP만) ################"
+            diff "$DIAG/stock_files.txt" "$DIAG/twrp_files.txt" > "$DIAG/diff_files.txt" || true
+            head -n 200 "$DIAG/diff_files.txt"
+          fi
+
+          ls -la output
 
       - name: Upload Artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: twrp-recovery
-          path: workspace/output/*
+          if-no-files-found: warn
+          path: |
+            workspace/output/**
+            workspace/build.log
 
       - name: Upload to Release
         if: ${{ github.event.inputs.PUBLISH_RELEASE == 'true' }}
