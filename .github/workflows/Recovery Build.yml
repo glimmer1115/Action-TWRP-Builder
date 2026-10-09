@@ -16,7 +16,8 @@ on:
         required: false
       STOCK_RECOVERY_URL:
         description: '순정 recovery.img 다운로드 URL (필수)'
-        required: false
+        required: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,7 +31,6 @@ jobs:
     - name: Prepare the environment
       run: |
         sudo apt update && sudo apt upgrade -y
-        # Android 8.1 빌드를 위해 구버전 라이브러리 및 필수 도구 설치 (2to3 추가)
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
@@ -40,7 +40,6 @@ jobs:
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils \
             bison flex m4 2to3 python3-2to3 || true
         
-        # 심볼릭 링크 설정
         sudo ln -sf /usr/bin/python3 /usr/bin/python || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
@@ -112,7 +111,9 @@ jobs:
         echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
+        # 중요: 커널 빌드를 하지 않고 외부 파일을 사용하도록 설정
         echo "BOARD_KERNEL_IMAGE_NAME := kernel" >> ./$REAL_D_PATH/BoardConfig.mk
+        echo "TARGET_KERNEL_SOURCE := " >> ./$REAL_D_PATH/BoardConfig.mk
       working-directory: workspace
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
@@ -120,7 +121,7 @@ jobs:
         swap-size-gb: 12
     - name: Building recovery & Repackaging
       run: |
-        # 1. 빌드 도구 경로 설정
+        # 1. 기본 도구 준비
         mkdir -p prebuilts/misc/linux-x86/bison prebuilts/misc/linux-x86/flex prebuilts/build-tools/linux-x86/bin
         wget -q https://raw.githubusercontent.com/LineageOS/android_prebuilts_build-tools/lineage-17.1/linux-x86/bin/bison -O prebuilts/build-tools/linux-x86/bin/bison
         chmod +x prebuilts/build-tools/linux-x86/bin/bison
@@ -128,55 +129,60 @@ jobs:
         ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
         ln -sf $(which m4) prebuilts/build-tools/linux-x86/bin/m4 || true
         
-        # 2. Python 3 호환성 패치 (강화 버전)
-        echo "Applying Python compatibility patches..."
-        # .iteritems() -> .items() 변환
-        find . -type f -name "*.py" -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
-        # print 문 변환
-        find . -type f -name "*.py" -exec sed -i -E 's/^([[:space:]]*)print[[:space:]]+([^(\n]*)$/\1print(\2)/g' {} + || true
-        # [추가] except ExceptionA, ExceptionB: -> except (ExceptionA, ExceptionB): 변환 (SyntaxError 해결)
-        find . -type f -name "*.py" -exec sed -i -E 's/(except[[:space:]]+)([a-zA-Z0-9_.]+),[[:space:]]*([a-zA-Z0-9_.]+):/\1(\2, \3):/g' {} + || true
-        # 2to3 실행 (이제 설치되었으므로 작동함)
-        find . -type f -name "*.py" -exec 2to3 -w -n {} + || true
-        
-        # 3. 빌드 환경 설정
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        lunch omni_gtaxladwifikx-eng
-        
-        # 핑거프린트 길이 체크 무력화
-        if [ -f build/tools/post_process_props.py ]; then
-          sed -i 's/if len(fingerprint) > 91:/if False:/g' build/tools/post_process_props.py
-          sed -i 's/sys.exit(1)/pass/g' build/tools/post_process_props.py
-        fi
-        
-        # 4. 빌드 실행
-        make recoveryimage -j$(nproc)
-        
-        # 5. 후처리 및 리패키징
-        mkdir -p ../output
+        # 2. magiskboot 준비 및 커널 추출 (핵심 수정 부분)
         wget https://github.com/cfsa/magiskboot-bin/raw/master/magiskboot
         chmod +x magiskboot
         
         STOCK_URL="${{ github.event.inputs.STOCK_RECOVERY_URL }}"
         if [ -n "$STOCK_URL" ]; then
           wget $STOCK_URL -O stock_recovery.img
+          echo "Extracting kernel from stock recovery..."
+          mkdir stock_unpack && cd stock_unpack
+          ../magiskboot unpack ../stock_recovery.img
+          # 추출된 kernel 파일을 빌드 시스템이 찾을 수 있는 위치로 복사
+          mkdir -p ../out/target/product/gtaxladwifikx/
+          cp kernel ../out/target/product/gtaxladwifikx/kernel
+          cd ..
+        else
+          echo "Error: STOCK_RECOVERY_URL is required to extract the kernel."
+          exit 1
+        fi
+
+        # 3. Python 3 호환성 패치
+        echo "Applying Python compatibility patches..."
+        find . -type f -name "*.py" -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
+        find . -type f -name "*.py" -exec sed -i -E 's/^([[:space:]]*)print[[:space:]]+([^(\n]*)$/\1print(\2)/g' {} + || true
+        find . -type f -name "*.py" -exec sed -i -E 's/(except[[:space:]]+)([a-zA-Z0-9_.]+),[[:space:]]*([a-zA-Z0-9_.]+):/\1(\2, \3):/g' {} + || true
+        find . -type f -name "*.py" -exec 2to3 -w -n {} + || true
+        
+        # 4. 빌드 환경 설정
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        lunch omni_gtaxladwifikx-eng
+        
+        if [ -f build/tools/post_process_props.py ]; then
+          sed -i 's/if len(fingerprint) > 91:/if False:/g' build/tools/post_process_props.py
+          sed -i 's/sys.exit(1)/pass/g' build/tools/post_process_props.py
         fi
         
-        if [ -f stock_recovery.img ]; then
-          echo "Starting repackaging with stock recovery..."
-          mkdir stock_rec && cd stock_rec
+        # 5. 빌드 실행 (recoveryimage만 빌드)
+        # 커널이 이미 out 폴더에 있으므로 ninja가 에러를 내지 않고 진행함
+        make recoveryimage -j$(nproc)
+        
+        # 6. 리패키징
+        mkdir -p ../output
+        if [ -f out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
+          echo "Starting repackaging..."
+          mkdir repack_work && cd repack_work
           ../magiskboot unpack ../stock_recovery.img
-          if [ -f ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
-            cp ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ramdisk.cpio
-            ../magiskboot repack ../stock_recovery.img ../recovery.img
-          else
-            echo "Error: ramdisk-recovery.cpio not found."
-            exit 1
-          fi
+          cp ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ramdisk.cpio
+          ../magiskboot repack ../stock_recovery.img ../output/recovery.img
           cd ..
         elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
           cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
+        else
+          echo "Error: Recovery image not found."
+          exit 1
         fi
         
         cd ../output
