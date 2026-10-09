@@ -1,4 +1,4 @@
-name: Recovery Build - Knox Buster Edition
+name: Recovery Build - Debug Edition
 on:
   workflow_dispatch:
     inputs:
@@ -155,29 +155,21 @@ jobs:
           lunch "$LUNCH"
           PRODUCT_DIR="$ANDROID_PRODUCT_OUT"
           echo "PRODUCT_DIR=$PRODUCT_DIR" >> "$GITHUB_ENV"
-          STOCK_IMG="$GITHUB_WORKSPACE/stock/stock_recovery.img"
           
-          cat > mkdt.py <<'PY'
-          import sys, struct
-          d = open(sys.argv[1], "rb").read()
-          ks, ka, rs, ra, ss, sa, ta, ps, dts, ov = struct.unpack_from("<10I", d, 8)
-          pad = lambda n: (-n) % ps
-          pos = ps + ks + pad(ks) + rs + pad(rs) + ss + pad(ss)
-          dt = d[pos:pos + dts] if dts > 4 else b""
-          open(sys.argv[2], "wb").write(dt)
-          PY
-
-          run_make() { make -j"$(nproc)" "$@" 2>&1 | tee run.log; }
+          echo "--- Starting build process ---"
+          # make 로그를 파일로 저장하면서 동시에 화면 출력
+          make -j"$(nproc)" recoveryimage 2>&1 | tee build_log.txt
           
-          # 실제 빌드 시도
-          if ! run_make recoveryimage; then
-            echo "::warning:: Main build failed. Attempting fallback to ramdisk build..."
-            if ! run_make "$PRODUCT_DIR/ramdisk-recovery.img"; then
-              echo "::error:: Both build attempts failed. Creating dummy ramdisk to avoid crash."
-              mkdir -p "$PRODUCT_DIR"
-              echo "dummy" > "$PRODUCT_DIR/ramdisk-recovery.img"
-            fi
+          echo "--- Build Step Finished. Checking Files ---"
+          if [ -d "$PRODUCT_DIR" ]; then
+            echo "Contents of $PRODUCT_DIR:"
+            ls -R "$PRODUCT_DIR"
+          else
+            echo "CRITICAL ERROR: Product directory not created!"
           fi
+          
+          echo "--- Last 500 lines of Build Log (Search for ERROR or FAILED) ---"
+          tail -n 500 build_log.txt
       - name: Package for Odin (Knox-Buster)
         working-directory: workspace
         run: |
