@@ -1,226 +1,252 @@
 name: Recovery Build
+
 on:
   workflow_dispatch:
     inputs:
       MANIFEST_URL:
-        description: 'MANIFEST_URL'
+        description: 'TWRP manifest URL'
         required: false
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
-        description: 'MANIFEST_BRANCH'
+        description: 'TWRP manifest branch'
         required: false
+        default: 'twrp-8.1'
       DEVICE_TREE_URL:
-        description: 'DEVICE_TREE_URL'
-        required: false
+        description: '디바이스 트리 git URL (필수)'
+        required: true
       DEVICE_TREE_BRANCH:
-        description: 'DEVICE_TREE_BRANCH'
+        description: '디바이스 트리 브랜치'
         required: false
+        default: 'android-8.1'
+      CODENAME_SRC:
+        description: '트리의 원래 코드네임'
+        required: false
+        default: 'gtaxlwifi'
+      CODENAME_DST:
+        description: '내 기기 코드네임 (비우면 치환 안 함)'
+        required: false
+        default: ''
+      LUNCH_TARGET:
+        description: 'lunch 대상 (비우면 트리에서 자동 탐지, 예: omni_gtaxlwifi-eng)'
+        required: false
+        default: ''
       STOCK_RECOVERY_URL:
-        description: '순정 recovery.img 다운로드 URL (비워두면 저장소의 recovery.img 사용)'
+        description: '순정 recovery.img 다운로드 URL (비우면 저장소 루트의 recovery.img 사용)'
         required: false
+        default: ''
+      USE_STOCK_KERNEL:
+        description: '순정 recovery 의 kernel 을 TARGET_PREBUILT_KERNEL 로 강제 사용'
+        type: boolean
+        required: false
+        default: false
+      PUBLISH_RELEASE:
+        description: 'GitHub Release 로도 업로드'
+        type: boolean
+        required: false
+        default: false
+
+env:
+  MANIFEST_URL: ${{ github.event.inputs.MANIFEST_URL }}
+  MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH }}
+  DEVICE_TREE_URL: ${{ github.event.inputs.DEVICE_TREE_URL }}
+  DEVICE_TREE_BRANCH: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
+  CODENAME_SRC: ${{ github.event.inputs.CODENAME_SRC }}
+  CODENAME_DST: ${{ github.event.inputs.CODENAME_DST }}
+  LUNCH_TARGET_IN: ${{ github.event.inputs.LUNCH_TARGET }}
+  STOCK_RECOVERY_URL: ${{ github.event.inputs.STOCK_RECOVERY_URL }}
+  USE_STOCK_KERNEL: ${{ github.event.inputs.USE_STOCK_KERNEL }}
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Android 8.1 빌드는 최신 24.04 보다 22.04 가 호환성이 좋다
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
     permissions:
       contents: write
     steps:
-    - name: Check Out
-      uses: actions/checkout@v4
+      - name: Check Out
+        uses: actions/checkout@v4
 
-    - name: Cleanup
-      uses: rokibhasansagar/slimhub_actions@main
+      - name: Cleanup disk
+        uses: rokibhasansagar/slimhub_actions@main
 
-    - name: Prepare the environment
-      run: |
-        sudo apt update && sudo apt upgrade -y
-        DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
-            linux-modules-extra-$(uname -r) \
-            gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
-            libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
-            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libncurses5 libtinfo5 libsdl1.2-dev \
-            build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
-            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 python2 tar android-sdk-libsparse-utils \
-            bison flex m4 2to3 python3-2to3 || true
-        
-        sudo ln -sf /usr/bin/python3 /usr/bin/python || true
-        sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
-        sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 12
 
-    - name: Install OpenJDK
-      uses: actions/setup-java@v5
-      with:
-        distribution: 'zulu'
-        java-version: '8'
+      - name: Prepare the environment
+        run: |
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -yq \
+            git curl wget unzip zip tar bc bison flex m4 gperf ccache lzop lz4 liblz4-tool \
+            gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev lib32z1-dev lib32readline-dev \
+            libncurses5 libncurses-dev libxml2-utils xsltproc libssl-dev squashfs-tools \
+            schedtool pngcrush imagemagick python2 python3 android-sdk-libsparse-utils \
+            device-tree-compiler
 
-    - name: Install repo
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y repo
+          # Android 8.1 빌드 시스템은 python2 기준이다 (소스 파일을 sed 로 고치지 않는다)
+          sudo update-alternatives --install /usr/bin/python python /usr/bin/python2 10
+          sudo update-alternatives --set python /usr/bin/python2
+          python --version
 
-    - name: Initialize repo
-      id: pwd
-      run: |
-        mkdir workspace
-        cd workspace
-        git config --global user.name "Nico170420"
-        git config --global user.email "b170420nc@gmail.com"
-        
-        REAL_M_URL="${{ github.event.inputs.MANIFEST_URL }}"
-        if [ -z "$REAL_M_URL" ]; then
-          REAL_M_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni"
-        fi
-        
-        REAL_M_BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
-        if [ -z "$REAL_M_BRANCH" ]; then
-          REAL_M_BRANCH="twrp-8.1"
-        fi
-        
-        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
-        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+          # 구버전 호스트 바이너리용 심볼릭 링크
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
-    - name: Repo Sync
-      run: repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
-      working-directory: workspace
+      - name: Install OpenJDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '8'
 
-    - name: Configure Device Tree
-      run: |
-        REAL_D_URL="${{ github.event.inputs.DEVICE_TREE_URL }}"
-        REAL_D_BRANCH="${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-        REAL_D_PATH="device/samsung/gtaxladwifikx"
-        
-        if [ -n "$REAL_D_URL" ]; then
-          git clone $REAL_D_URL -b ${REAL_D_BRANCH:-android-8.1} ./$REAL_D_PATH || true
-        fi
-        
-        mkdir -p ./$REAL_D_PATH
-        echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_gtaxladwifikx.mk" > ./$REAL_D_PATH/AndroidProducts.mk
-        echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)" > ./$REAL_D_PATH/omni_gtaxladwifikx.mk
-        echo "PRODUCT_NAME := omni_gtaxladwifikx" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
-        echo "PRODUCT_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
-        echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
-        echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
-        
-        echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_ARCH_VARIANT := armv8-a" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_CPU_ABI := arm64-v8a" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_2ND_ARCH := arm" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_2ND_ARCH_VARIANT := armv7-a-neon" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_2ND_CPU_ABI := armeabi-v7a" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_THEME := portrait_hdpi" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "DEVICE_RESOLUTION := 1200x1920" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_SCREEN_WIDTH := 1200" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_SCREEN_HEIGHT := 1920" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "BOARD_AVB_ENABLE := false" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "BOARD_BUILD_DISABLED_VBMETAIMAGE := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_INCLUDE_CRYPTO := false" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_NEVER_UNMOUNT_SYSTEM := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_NO_REBOOT_BOOTLOADER := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TW_HAS_DOWNLOAD_MODE := true" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "BOARD_KERNEL_IMAGE_NAME := kernel" >> ./$REAL_D_PATH/BoardConfig.mk
-        echo "TARGET_KERNEL_SOURCE := " >> ./$REAL_D_PATH/BoardConfig.mk
-      working-directory: workspace
+      - name: Install repo
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
-    - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 12
+      - name: Validate inputs
+        run: |
+          if [ -z "$DEVICE_TREE_URL" ]; then
+            echo "::error::DEVICE_TREE_URL 이 필요합니다. 검증된 gtaxlwifi 계열 트리를 넣어주세요."
+            exit 1
+          fi
+          if [ -z "$STOCK_RECOVERY_URL" ] && [ ! -f "$GITHUB_WORKSPACE/recovery.img" ]; then
+            echo "::error::recovery.img 가 저장소 루트에 없고 STOCK_RECOVERY_URL 도 비어 있습니다."
+            exit 1
+          fi
 
-    - name: Building recovery & Repackaging
-      run: |
-        # 1. 기본 도구 준비
-        mkdir -p prebuilts/misc/linux-x86/bison prebuilts/misc/linux-x86/flex prebuilts/build-tools/linux-x86/bin
-        wget -q https://raw.githubusercontent.com/LineageOS/android_prebuilts_build-tools/lineage-17.1/linux-x86/bin/bison -O prebuilts/build-tools/linux-x86/bin/bison
-        chmod +x prebuilts/build-tools/linux-x86/bin/bison
-        ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/misc/linux-x86/bison/bison
-        ln -sf $(which flex) prebuilts/misc/linux-x86/flex/flex || true
-        ln -sf $(which m4) prebuilts/build-tools/linux-x86/bin/m4 || true
-        
-        # 2. magiskboot 준비 및 커널 추출
-        MAGISKBOOT_URLS=(
-          "https://github.com/cfsa/magiskboot-bin/raw/master/magiskboot"
-          "https://github.com/topjohnwu/Magisk/raw/master/app/src/main/assets/magiskboot"
-        )
-        for url in "${MAGISKBOOT_URLS[@]}"; do
-          wget -q $url -O magiskboot && break
-        done
-        chmod +x magiskboot
-        
-        # [수정 포인트] recovery.img 확보 로직 개선
-        STOCK_URL="${{ github.event.inputs.STOCK_RECOVERY_URL }}"
-        if [ -n "$STOCK_URL" ]; then
-          echo "Downloading from provided URL..."
-          wget $STOCK_URL -O stock_recovery.img
-        elif [ -f ../recovery.img ]; then
-          echo "Using recovery.img from repository root..."
-          cp ../recovery.img stock_recovery.img
-        else
-          echo "Error: recovery.img not found in repo root and no URL provided."
-          exit 1
-        fi
+      - name: Initialize and sync repo
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@users.noreply.github.com"
+          mkdir -p workspace && cd workspace
+          repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+          repo sync -c -j"$(nproc)" --force-sync --no-clone-bundle --no-tags
 
-        echo "Extracting kernel from stock recovery..."
-        mkdir stock_unpack && cd stock_unpack
-        ../magiskboot unpack ../stock_recovery.img
-        mkdir -p ../out/target/product/gtaxladwifikx/
-        cp kernel ../out/target/product/gtaxladwifikx/kernel
-        cd ..
+      - name: Prepare stock recovery (header info)
+        run: |
+          mkdir -p tools stock
+          # magiskboot 는 Magisk APK 안에 들어 있다 (버전 고정)
+          wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O tools/magisk.apk
+          unzip -j -o tools/magisk.apk 'lib/x86_64/libmagiskboot.so' -d tools
+          mv tools/libmagiskboot.so tools/magiskboot
+          chmod +x tools/magiskboot
 
-        # 3. Python 3 호환성 패치
-        echo "Applying Python compatibility patches..."
-        find . -type f -name "*.py" -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
-        find . -type f -name "*.py" -exec sed -i -E 's/^([[:space:]]*)print[[:space:]]+([^(\n]*)$/\1print(\2)/g' {} + || true
-        find . -type f -name "*.py" -exec sed -i -E 's/(except[[:space:]]+)([a-zA-Z0-9_.]+),[[:space:]]*([a-zA-Z0-9_.]+):/\1(\2, \3):/g' {} + || true
-        find . -type f -name "*.py" -exec 2to3 -w -n {} + || true
-        
-        # 4. 빌드 환경 설정
-        source build/envsetup.sh
-        export ALLOW_MISSING_DEPENDENCIES=true
-        lunch omni_gtaxladwifikx-eng
-        
-        if [ -f build/tools/post_process_props.py ]; then
-          sed -i 's/if len(fingerprint) > 91:/if False:/g' build/tools/post_process_props.py
-          sed -i 's/sys.exit(1)/pass/g' build/tools/post_process_props.py
-        fi
-        
-        # 5. 빌드 실행
-        make recoveryimage -j$(nproc)
-        
-        # 6. 리패키징
-        mkdir -p output
-        if [ -f out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ]; then
-          echo "Starting repackaging..."
-          mkdir repack_work && cd repack_work
-          ../magiskboot unpack ../stock_recovery.img
-          cp ../out/target/product/gtaxladwifikx/ramdisk-recovery.cpio ramdisk.cpio
-          ../magiskboot repack ../stock_recovery.img ../output/recovery.img
-          cd ..
-        elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
-          cp -v out/target/product/gtaxladwifikx/recovery.img output/
-        else
-          echo "Error: Recovery image not found."
-          exit 1
-        fi
-        
-        cd output
-        dd if=/dev/zero of=vbmeta.img bs=256 count=1
-        if [ -f recovery.img ]; then
-          tar -cf twrp_smt583_avb_disabled.tar recovery.img vbmeta.img
-        fi
-        ls -la
-      working-directory: workspace
+          if [ -n "$STOCK_RECOVERY_URL" ]; then
+            wget -q "$STOCK_RECOVERY_URL" -O stock/stock_recovery.img
+          else
+            cp "$GITHUB_WORKSPACE/recovery.img" stock/stock_recovery.img
+          fi
+          ls -l stock/stock_recovery.img
 
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: twrp-smt583-unlocked
-        path: workspace/output/*
+          cd stock
+          ../tools/magiskboot unpack -h stock_recovery.img || true
+          echo "===== 순정 recovery 헤더 정보 (BoardConfig.mk 의 cmdline/base/pagesize 와 비교) ====="
+          cat header 2>/dev/null || true
+          echo "============================================================================"
+          ls -l
 
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        files: workspace/output/*
-        name: "SM-T583 TWRP Recovery"
+      - name: Configure Device Tree
+        working-directory: workspace
+        run: |
+          TREE_NAME="${CODENAME_DST:-$CODENAME_SRC}"
+          TREE_DIR="device/samsung/${TREE_NAME}"
+          echo "TREE_DIR=$TREE_DIR" >> "$GITHUB_ENV"
+
+          mkdir -p device/samsung
+          git clone --depth=1 "$DEVICE_TREE_URL" -b "$DEVICE_TREE_BRANCH" "$TREE_DIR"
+          rm -rf "$TREE_DIR/.git"
+
+          # 코드네임 치환 (파일/폴더 이름 + 내용)
+          if [ -n "$CODENAME_DST" ] && [ "$CODENAME_DST" != "$CODENAME_SRC" ]; then
+            echo "Renaming $CODENAME_SRC -> $CODENAME_DST"
+            cd "$TREE_DIR"
+            find . -depth -name "*${CODENAME_SRC}*" | while read -r p; do
+              d=$(dirname "$p"); b=$(basename "$p")
+              mv "$p" "$d/${b//$CODENAME_SRC/$CODENAME_DST}"
+            done
+            grep -rIl -- "$CODENAME_SRC" . | xargs -r sed -i "s/${CODENAME_SRC}/${CODENAME_DST}/g"
+            cd - >/dev/null
+          fi
+
+          # lunch 대상 자동 탐지
+          if [ -n "$LUNCH_TARGET_IN" ]; then
+            LUNCH="$LUNCH_TARGET_IN"
+          else
+            MK=$(ls "$TREE_DIR"/omni_*.mk "$TREE_DIR"/twrp_*.mk 2>/dev/null | head -n1 || true)
+            if [ -z "$MK" ]; then
+              echo "::error::omni_*.mk / twrp_*.mk 를 트리에서 찾지 못했습니다. LUNCH_TARGET 을 직접 지정하세요."
+              ls -la "$TREE_DIR"
+              exit 1
+            fi
+            LUNCH="$(basename "$MK" .mk)-eng"
+          fi
+          echo "LUNCH=$LUNCH" >> "$GITHUB_ENV"
+          echo "lunch target: $LUNCH"
+
+          # 순정 커널 강제 사용 (옵션)
+          if [ "$USE_STOCK_KERNEL" = "true" ]; then
+            mkdir -p "$TREE_DIR/prebuilt"
+            cp "$GITHUB_WORKSPACE/stock/kernel" "$TREE_DIR/prebuilt/kernel"
+            echo "TARGET_PREBUILT_KERNEL := $TREE_DIR/prebuilt/kernel" >> "$TREE_DIR/BoardConfig.mk"
+          fi
+
+          echo "===== BoardConfig.mk ====="
+          cat "$TREE_DIR/BoardConfig.mk"
+
+      - name: Build recovery
+        working-directory: workspace
+        run: |
+          set +e
+          set +u
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+          export WITH_DEXPREOPT=false
+          source build/envsetup.sh
+          lunch "$LUNCH"
+          make -j"$(nproc)" recoveryimage 2>&1 | tee build.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Package for Odin
+        working-directory: workspace
+        run: |
+          IMG=$(ls out/target/product/*/recovery.img | head -n1)
+          echo "built: $IMG"
+          mkdir -p output
+          cp "$IMG" output/recovery.img
+
+          # 삼성 부트로더용 SEAndroid 마커 (이미 있으면 중복 추가 안 함)
+          if ! tail -c 16 output/recovery.img | grep -q "SEANDROIDENFORCE"; then
+            printf 'SEANDROIDENFORCE' >> output/recovery.img
+          fi
+
+          echo "stock : $(stat -c %s "$GITHUB_WORKSPACE/stock/stock_recovery.img") bytes"
+          echo "built : $(stat -c %s output/recovery.img) bytes"
+
+          # Odin AP 슬롯용 tar (vbmeta 는 이 기기에 없으므로 포함하지 않는다)
+          cd output
+          tar -H ustar -c recovery.img > twrp_recovery.tar
+          cp twrp_recovery.tar twrp_recovery.tar.md5
+          md5sum -t twrp_recovery.tar >> twrp_recovery.tar.md5
+          ls -la
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-recovery
+          path: |
+            workspace/output/*
+            workspace/build.log
+
+      - name: Upload to Release
+        if: ${{ github.event.inputs.PUBLISH_RELEASE == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: twrp-${{ github.run_number }}
+          name: "TWRP Recovery #${{ github.run_number }}"
+          files: workspace/output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
