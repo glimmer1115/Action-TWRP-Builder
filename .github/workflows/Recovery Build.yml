@@ -9,7 +9,7 @@ on:
       MANIFEST_BRANCH:
         description: 'MANIFEST_BRANCH'
         required: false
-      DEVICE_TREE_URL:
+		DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: false
       DEVICE_TREE_BRANCH:
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    steps:
+    step		s:
     - name: Check Out
       uses: actions/checkout@v4
 
@@ -75,7 +75,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
+        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
 
     - name: Repo Sync
       run: |
@@ -130,29 +130,25 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
-        # prebuilts 디렉터리 생성 및 시스템 도구 링크
-        BISON_BIN=$(which bison)
-        FLEX_BIN=$(which flex)
-        M4_BIN=$(which m4)
-        
+        # prebuilts 디렉터리 생성
         mkdir -p prebuilts/misc/linux-x86/bison
         mkdir -p prebuilts/misc/linux-x86/flex
         mkdir -p prebuilts/build-tools/path/linux-x86
         mkdir -p prebuilts/build-tools/linux-x86/bin
-        
-        ln -sf $BISON_BIN prebuilts/misc/linux-x86/bison/bison || true
+
+        # Android 8.1 호환 Bison 2.7 바이너리 다운로드 및 강제 교체 (checkpolicy 에러 해결)
+        wget -q https://raw.githubusercontent.com/LineageOS/android_prebuilts_build-tools/lineage-17.1/linux-x86/bin/bison -O prebuilts/build-tools/linux-x86/bin/bison
+        chmod +x prebuilts/build-tools/linux-x86/bin/bison
+
+        FLEX_BIN=$(which flex)
+        M4_BIN=$(which m4)
+
+        ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/misc/linux-x86/bison/bison
+        ln -sf $(pwd)/prebuilts/build-tools/linux-x86/bin/bison prebuilts/build-tools/path/linux-x86/bison
         ln -sf $FLEX_BIN prebuilts/misc/linux-x86/flex/flex || true
-        ln -sf $BISON_BIN prebuilts/build-tools/path/linux-x86/bison || true
         ln -sf $FLEX_BIN prebuilts/build-tools/path/linux-x86/flex || true
-        ln -sf $BISON_BIN prebuilts/build-tools/linux-x86/bin/bison || true
         ln -sf $FLEX_BIN prebuilts/build-tools/linux-x86/bin/flex || true
         ln -sf $M4_BIN prebuilts/build-tools/linux-x86/bin/m4 || true
-
-        # checkpolicy bison 3.8+ 정교화 패치 (policy_parse.h/c 정상 생성 보장)
-        sed -i 's/%name-prefix=\(" policy_yy"\|"policy_yy"\|policy_yy\)/%name-prefix "policy_yy"/g' external/selinux/checkpolicy/policy_parse.y || true
-        sed -i 's/%define api.prefix {policy_yy}/%name-prefix "policy_yy"/g' external/selinux/checkpolicy/policy_parse.y || true
-        sed -i 's/YYPARSE_PARAM//* YYPARSE_PARAM *//g' external/selinux/checkpolicy/policy_parse.y || true
-        sed -i 's/YYLEX_PARAM//* YYLEX_PARAM *//g' external/selinux/checkpolicy/policy_parse.y || true
 
         # Python 2 -> Python 3 호환성 일괄 패치
         find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
@@ -181,7 +177,7 @@ jobs:
         
         wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
         unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
-        mv libmagisk	boot.so magiskboot
+        mv libmagiskboot.so magiskboot
         chmod +x magiskboot
         
         if [ -f ../recovery.img ]; then
@@ -195,34 +191,7 @@ jobs:
             cp out/target/product/gtaxladwifikx/ramdisk-recovery.cpio stock_rec/ramdisk.cpio
             cd stock_rec
             ../magiskboot repack ../../recovery.img ../../output/recovery.img
-            cd .	.
-          fi	
+            cd ..
+          fi
         elif [ -f out/target/product/gtaxladwifikx/recovery.img ]; then
-          cp -v out/target/product/gtaxladwifikx/recovery.img ../output/
-        fi
-        
-        if [ -f ../output/recovery.img ]; then
-          cd ../output
-          tar -cf twrp_smt583_unlocked.tar recovery.img
-          cd ..
-        fi
-        
-        ls -la ../output
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: twrp-smt583-unlocked
-        path: output/*
-
-    - name: Upload to Release
-      uses: softprops/action-gh-release@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        files: output/*
-        name: sm-t583-twrp-unlocked-build
-        tag_name: ${{ github.run_id }}
-        body: |
-          삼성 갤럭시 탭 Advanced2 (SM-T583) Magiskboot 커널/dtb 재합성 TWRP 빌드 완료.
+          cp -v out/target/product/gt
