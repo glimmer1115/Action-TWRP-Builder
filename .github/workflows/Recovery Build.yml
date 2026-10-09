@@ -11,7 +11,7 @@ on:
         required: false
         default: 'twrp-6.0'
       DEVICE_TREE_URL:
-        description: '디바이스 트리 git URL (필수)'
+        description: '디바이스 트리 git URL'
         required: true
       DEVICE_TREE_BRANCH:
         description: '디바이스 트리 브랜치'
@@ -161,51 +161,70 @@ jobs:
           lunch "$LUNCH"
           make -j"$(nproc)" recoveryimage 2>&1 | tee build.log
 
-      - name: Fix and Patch Ramdisk (The Core Fix)
+      - name: Surgical Patch Ramdisk (The Last Hope)
         working-directory: workspace
         run: |
+          # 경로 정의
           PROD_DIR=$(ls -d out/target/product/*/ | head -n1)
-          FIX_DIR="$PWD/ramdisk_fix"
-          UNPACK_DIR="$FIX_DIR/unpack"
+          FIX_BASE="$PWD/ramdisk_fix"
+          UNPACK_DIR="$FIX_BASE/unpack"
           mkdir -p "$UNPACK_DIR"
           
-          # TWRP ramdisk 파일 찾기
+          # 1. TWRP Ramdisk 추출
           RD_FILE=""
           for f in "$PROD_DIR"ramdisk-recovery.img "$PROD_DIR"ramdisk-recovery.cpio.gz "$PROD_DIR"ramdisk-recovery.cpio; do
             if [ -f "$f" ]; then RD_FILE="$f"; break; fi
           done
           
           if [ -z "$RD_FILE" ]; then
-            echo "ramdisk file not found, trying recovery/root..."
-            (cd "$PROD_DIR"recovery/root && find . | cpio -o -H newc | gzip -6 > "$FIX_DIR/twrp_rd.gz")
+            echo "Finding ramdisk in recovery/root..."
+            (cd "$PROD_DIR"recovery/root && find . | cpio -o -H newc | gzip -6 > "$FIX_BASE/twrp_rd.gz")
+            RD_CPIO="$FIX_BASE/twrp_rd.gz"
           else
-            # 파일 압축 해제
+            # gzip 여부 확인 및 해제
             if [[ "$RD_FILE" == *.gz ]] || file "$RD_FILE" | grep -q "gzip"; then
-              zcat "$RD_FILE" > "$FIX_DIR/rd.cpio"
+              zcat "$RD_FILE" > "$FIX_BASE/rd.cpio"
             else
-              cp "$RD_FILE" "$FIX_DIR/rd.cpio"
+              cp "$RD_FILE" "$FIX_BASE/rd.cpio"
             fi
-            (cd "$UNPACK_DIR" && cpio -idmv < "$FIX_DIR/rd.cpio")
+            RD_CPIO="$FIX_BASE/rd.cpio"
           fi
           
-          # --- [정밀 수술 시작] ---
+          # 2. 압축 해제 (절대 경로 사용)
+          if [ -f "$RD_CPIO" ]; then
+            if [[ "$RD_CPIO" == *.gz ]]; then
+              zcat "$RD_CPIO" | (cd "$UNPACK_DIR" && cpio -idmv)
+            else
+              (cd "$UNPACK_DIR" && cpio -idmv < "$RD_CPIO")
+            fi
+          fi
+          
+          # 3. [초정밀 수술] init.rc 및 default.prop
           if [ -f "$UNPACK_DIR/init.rc" ]; then
-            echo "Patching init.rc..."
+            echo "Applying Hardened Patch to init.rc..."
+            # 모든 early-init을 init으로 변경 (8.0 커널 호환)
             sed -i 's/on early-init/on init/g' "$UNPACK_DIR/init.rc"
+            # 부팅 시 충돌 가능성이 매우 높은 서비스들 강제 비활성화
             sed -i 's/service vold/service vold disabled/g' "$UNPACK_DIR/init.rc"
+            sed -i 's/service adbd/service adbd disabled/g' "$UNPACK_DIR/init.rc"
+            sed -i 's/service surfaceflinger/service surfaceflinger disabled/g' "$UNPACK_DIR/init.rc"
           fi
           
           if [ -f "$UNPACK_DIR/default.prop" ]; then
-            echo "Patching default.prop..."
-            echo "ro.debuggable=1" >> "$UNPACK_DIR/default.prop"
-            echo "ro.secure=0" >> "$UNPACK_DIR/default.prop"
-            echo "persist.sys.usb.config=mtp" >> "$UNPACK_DIR/default.prop"
+            echo "Hardening default.prop..."
+            # SELinux 완전 무력화 및 디버깅 허용
+            cat >> "$UNPACK_DIR/default.prop" <<EOF
+ro.debuggable=1
+ro.secure=0
+smack.default_hat=0
+androidboot.selinux=permissive
+persist.sys.usb.config=mtp
+EOF
           fi
-          # --- [정밀 수술 종료] ---
           
-          # 다시 묶기
-          (cd "$UNPACK_DIR" && find . | cpio -o -H newc | gzip -6 > "$FIX_DIR/twrp_patched_rd.gz")
-          cp "$FIX_DIR/twrp_patched_rd.gz" "$PROD_DIR"ramdisk-recovery.img.patched
+          # 4. 다시 묶기
+          (cd "$UNPACK_DIR" && find . | cpio -o -H newc | gzip -6 > "$FIX_BASE/twrp_patched_rd.gz")
+          cp "$FIX_BASE/twrp_patched_rd.gz" "$PROD_DIR"ramdisk-recovery.img.patched
 
       - name: Package for Odin
         working-directory: workspace
