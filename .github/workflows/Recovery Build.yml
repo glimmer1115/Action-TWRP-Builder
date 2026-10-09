@@ -35,9 +35,14 @@ jobs:
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
-            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libncurses5 libncurses5:i386 libtinfo5 libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
-            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 tar android-sdk-libsparse-utils
+            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 python-is-python3 tar android-sdk-libsparse-utils || true
+            
+        # libncurses.so.5 심볼릭 링크 강제 생성 (Ubuntu 호환성 확보)
+        sudo apt-get install -y libncurses5 libtinfo5 || true
+        sudo ln -s /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
+        sudo ln -s /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
 
     - name: Install OpenJDK
       uses: actions/setup-java@v5
@@ -96,7 +101,7 @@ jobs:
         echo "PRODUCT_BRAND := samsung" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         echo "PRODUCT_MODEL := SM-T583" >> ./$REAL_D_PATH/omni_gtaxladwifikx.mk
         
-        # BoardConfig.mk 설정 (system/bin/linker 누락 해결 포함)
+        # BoardConfig.mk 설정
         echo "TARGET_OTA_LIST_MAX_SIZE := 117964800" > ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_DEVICE := gtaxladwifikx" >> ./$REAL_D_PATH/BoardConfig.mk
         echo "TARGET_ARCH := arm64" >> ./$REAL_D_PATH/BoardConfig.mk
@@ -131,7 +136,6 @@ jobs:
         
         lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
         
-        # 링커 에러 방지를 위한 타겟 디렉토리 사전 세팅
         mkdir -p out/target/product/gtaxladwifikx/system/bin
         touch out/target/product/gtaxladwifikx/system/bin/linker
         touch out/target/product/gtaxladwifikx/system/bin/linker64
@@ -141,7 +145,6 @@ jobs:
         
         mkdir -p ../output
         
-        # Magiskboot 다운로드 및 정교한 재합성
         wget https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
         unzip -j Magisk-v27.0.apk "lib/x86_64/libmagiskboot.so" -d .
         mv libmagiskboot.so magiskboot
