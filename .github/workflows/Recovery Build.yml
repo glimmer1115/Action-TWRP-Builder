@@ -56,6 +56,7 @@ jobs:
         sudo apt-get install -y repo
 
     - name: Initialize repo
+      id: pwd
       run: |
         mkdir workspace
         cd workspace
@@ -73,8 +74,7 @@ jobs:
           REAL_M_BRANCH="twrp-8.1"
         fi
         
-        repo init --depth=1 -u $REAL_M_URL -b $REAL_M_BRANCH
-      id: pwd
+        repo init --depth=1 -u $REAL_M_URL -b$REAL_M_BRANCH
 
     - name: Repo Sync
       run: |
@@ -129,9 +129,10 @@ jobs:
 
     - name: Building recovery & Magiskboot Repackaging
       run: |
-        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
+        # Python 2 -> Python 3 호환성 일괄 패치
+        find build/ -type f \( -name "*.py" -o -name "*.mk" \) -exec sed -i 's/\.iteritems()/\.items()/g' {} + || true
         
-        # Python 문법 호환성 패치
+        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
         sed -i 's/print "\(.*\)"/print("\1")/g' build/tools/check_radio_versions.py || true
         
         source build/envsetup.sh
@@ -194,4 +195,4 @@ jobs:
         body: |
           삼성 갤럭시 탭 Advanced2 (SM-T583) Magiskboot 커널/dtb 재합성 TWRP 빌드 완료.
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_
