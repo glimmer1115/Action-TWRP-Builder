@@ -135,8 +135,12 @@ jobs:
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' vendor/omni/build/tools/roomservice.py || true
         sed -i 's/print "\(.*\)"/print("\1")/g' build/tools/check_radio_versions.py || true
         
+        # fingerprint 길이 제한 패치 (post_process_props.py 수정)
+        sed -i 's/91/128/g' build/tools/post_process_props.py || true
+        
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
+        export BUILD_NUMBER="1"
         
         lunch omni_gtaxladwifikx-eng || lunch omni_gtaxladwifikx-userdebug
         
