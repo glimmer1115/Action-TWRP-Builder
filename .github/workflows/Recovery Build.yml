@@ -1,5 +1,4 @@
 name: Recovery Build
-
 on:
   workflow_dispatch:
     inputs:
@@ -8,16 +7,16 @@ on:
         required: false
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
-        description: 'TWRP manifest branch'
+        description: 'TWRP manifest branch (TeamWin gtaxlwifi 트리는 6.0 기준)'
         required: false
-        default: 'twrp-8.1'
+        default: 'twrp-6.0'
       DEVICE_TREE_URL:
         description: '디바이스 트리 git URL (필수)'
         required: true
       DEVICE_TREE_BRANCH:
         description: '디바이스 트리 브랜치'
         required: false
-        default: 'android-8.1'
+        default: 'android-6.0'
       CODENAME_SRC:
         description: '트리의 원래 코드네임'
         required: false
@@ -31,7 +30,7 @@ on:
         required: false
         default: ''
       STOCK_RECOVERY_URL:
-        description: '순정 recovery.img 다운로드 URL (비우면 저장소 루트의 recovery.img 사용)'
+        description: '순정 recovery.img URL (저장소 루트에 recovery.img 가 있으면 무시됨, 보통 비워둘 것)'
         required: false
         default: ''
       USE_STOCK_KERNEL:
@@ -66,6 +65,8 @@ jobs:
     steps:
       - name: Check Out
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Cleanup disk
         uses: rokibhasansagar/slimhub_actions@main
@@ -113,10 +114,6 @@ jobs:
             echo "::error::DEVICE_TREE_URL 이 필요합니다. 검증된 gtaxlwifi 계열 트리를 넣어주세요."
             exit 1
           fi
-          if [ -z "$STOCK_RECOVERY_URL" ] && [ ! -f "$GITHUB_WORKSPACE/recovery.img" ]; then
-            echo "::error::recovery.img 가 저장소 루트에 없고 STOCK_RECOVERY_URL 도 비어 있습니다."
-            exit 1
-          fi
 
       - name: Initialize and sync repo
         run: |
@@ -129,21 +126,39 @@ jobs:
       - name: Prepare stock recovery (header info)
         run: |
           mkdir -p tools stock
-          # magiskboot 는 Magisk APK 안에 들어 있다 (버전 고정)
-          wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O tools/magisk.apk
+
+          # 1) 순정 recovery.img 확보: 저장소 루트 파일 우선, 없으면 URL
+          if [ -f "$GITHUB_WORKSPACE/recovery.img" ]; then
+            echo "저장소 루트의 recovery.img 사용"
+            cp "$GITHUB_WORKSPACE/recovery.img" stock/stock_recovery.img
+          elif [ -n "$STOCK_RECOVERY_URL" ]; then
+            echo "URL 에서 다운로드: $STOCK_RECOVERY_URL"
+            if ! wget -nv "$STOCK_RECOVERY_URL" -O stock/stock_recovery.img; then
+              echo "::error::STOCK_RECOVERY_URL 다운로드 실패 (private 저장소이거나 주소가 틀림). 저장소 루트에 recovery.img 를 올리고 URL 칸은 비우세요."
+              exit 1
+            fi
+          else
+            echo "::error::recovery.img 가 저장소 루트에 없고 STOCK_RECOVERY_URL 도 비어 있습니다."
+            exit 1
+          fi
+
+          SIZE=$(stat -c %s stock/stock_recovery.img)
+          echo "stock recovery size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::recovery.img 가 비정상적으로 작습니다 (LFS 포인터이거나 잘못된 파일)."
+            head -c 300 stock/stock_recovery.img || true
+            exit 1
+          fi
+
+          # 2) magiskboot 준비 (Magisk APK 안에 들어 있음, 버전 고정)
+          wget -nv https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O tools/magisk.apk
           unzip -j -o tools/magisk.apk 'lib/x86_64/libmagiskboot.so' -d tools
           mv tools/libmagiskboot.so tools/magiskboot
           chmod +x tools/magiskboot
 
-          if [ -n "$STOCK_RECOVERY_URL" ]; then
-            wget -q "$STOCK_RECOVERY_URL" -O stock/stock_recovery.img
-          else
-            cp "$GITHUB_WORKSPACE/recovery.img" stock/stock_recovery.img
-          fi
-          ls -l stock/stock_recovery.img
-
+          # 3) 헤더 정보 출력 (실패해도 빌드는 계속)
           cd stock
-          ../tools/magiskboot unpack -h stock_recovery.img || true
+          ../tools/magiskboot unpack -h stock_recovery.img || echo "magiskboot unpack 실패 (헤더 정보만 생략)"
           echo "===== 순정 recovery 헤더 정보 (BoardConfig.mk 의 cmdline/base/pagesize 와 비교) ====="
           cat header 2>/dev/null || true
           echo "============================================================================"
@@ -157,6 +172,13 @@ jobs:
           echo "TREE_DIR=$TREE_DIR" >> "$GITHUB_ENV"
 
           mkdir -p device/samsung
+          echo "===== 원격 저장소의 브랜치 목록 ====="
+          git ls-remote --heads "$DEVICE_TREE_URL" | sed 's#.*refs/heads/##' || true
+          echo "===================================="
+          if ! git ls-remote --exit-code --heads "$DEVICE_TREE_URL" "$DEVICE_TREE_BRANCH" >/dev/null 2>&1; then
+            echo "::error::브랜치 '$DEVICE_TREE_BRANCH' 가 없습니다. 위 목록에서 실제 브랜치명을 DEVICE_TREE_BRANCH 에 넣으세요."
+            exit 1
+          fi
           git clone --depth=1 "$DEVICE_TREE_URL" -b "$DEVICE_TREE_BRANCH" "$TREE_DIR"
           rm -rf "$TREE_DIR/.git"
 
