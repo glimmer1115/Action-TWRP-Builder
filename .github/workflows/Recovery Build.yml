@@ -233,24 +233,10 @@ jobs:
           PRODUCT_DIR="$ANDROID_PRODUCT_OUT"
           echo "PRODUCT_DIR=$PRODUCT_DIR" >> "$GITHUB_ENV"
           echo "product out: $PRODUCT_DIR"
+          STOCK_IMG="$GITHUB_WORKSPACE/stock/stock_recovery.img"
 
-          : > build.log
-          run_make() {
-            make -j"$(nproc)" "$@" 2>&1 | tee -a build.log
-            return "${PIPESTATUS[0]}"
-          }
-
-          # 1차: 정상 빌드
-          run_make recoveryimage
-          RC=$?
-
-          # 2차: dt.img 를 만드는 규칙이 없어서 실패하면(6.0 트리 + 8.1 소스),
-          #      순정 recovery.img 에서 DT 를 뽑아 dt.img 로 채워 넣고 다시 시도한다.
-          #      (최종 결과물은 순정 커널/DT + TWRP 램디스크 repack 이라 DT 내용은 영향 없음)
-          if [ "$RC" -ne 0 ] && grep -q "dt.img" build.log; then
-            echo "::warning::dt.img 규칙 없음 -> 순정 이미지의 DT 로 대체하고 재시도합니다"
-            mkdir -p "$PRODUCT_DIR"
-            python3 - "$GITHUB_WORKSPACE/stock/stock_recovery.img" "$PRODUCT_DIR/dt.img" <<'PY'
+          # 순정 이미지에서 DT 만 뽑아내는 도우미 (dt.img 대체용)
+          cat > mkdt.py <<'PY'
           import sys, struct
           d = open(sys.argv[1], "rb").read()
           ks, ka, rs, ra, ss, sa, ta, ps, dts, ov = struct.unpack_from("<10I", d, 8)
@@ -263,14 +249,53 @@ jobs:
           open(sys.argv[2], "wb").write(dt)
           print("dt.img bytes:", len(dt))
           PY
-            run_make recoveryimage
-            RC=$?
-          fi
 
-          # 3차: 그래도 recovery.img 가 안 되면 TWRP 램디스크만이라도 만든다
-          if [ "$RC" -ne 0 ] && [ ! -f "$PRODUCT_DIR/ramdisk-recovery.img" ]; then
+          : > build.log
+          run_make() {
+            make -j"$(nproc)" "$@" 2>&1 | tee run.log
+            local rc="${PIPESTATUS[0]}"
+            cat run.log >> build.log
+            return "$rc"
+          }
+
+          # ninja 가 "파일 X 가 없고 만드는 규칙도 없다" 고 하면, X 가 산출물 폴더 안의 파일일 때
+          # 대체 파일(dt.img 는 순정 DT, 다른 .img 는 순정 이미지 복사, 그 외는 빈 파일)을 만들고 재시도한다.
+          # 최종 결과물은 "순정 커널/DT + TWRP 램디스크" repack 이라 이 대체 파일들은 영향이 없다.
+          build_with_placeholders() {
+            local target="$1" i rc missing base
+            for i in 1 2 3 4 5 6 7 8; do
+              run_make "$target"
+              rc=$?
+              if [ "$rc" -eq 0 ]; then return 0; fi
+              if ! grep -q "missing and no known rule" run.log; then return "$rc"; fi
+              missing=$(grep -o "ninja: error: '[^']*', needed by" run.log | tail -n1 | sed -E "s/^ninja: error: '([^']*)'.*/\1/")
+              if [ -z "$missing" ]; then return "$rc"; fi
+              case "$missing" in
+                "$PRODUCT_DIR"/*) ;;
+                *) echo "::warning::산출물 폴더 밖의 파일이라 대체하지 않음: $missing"; return "$rc" ;;
+              esac
+              if [ -e "$missing" ]; then return "$rc"; fi
+              base=$(basename "$missing")
+              echo "::warning::[$i] 규칙 없는 파일을 대체 생성: $base"
+              mkdir -p "$(dirname "$missing")"
+              case "$base" in
+                dt.img) python3 mkdt.py "$STOCK_IMG" "$missing" ;;
+                *.img)  cp "$STOCK_IMG" "$missing" ;;
+                *)      : > "$missing" ;;
+              esac
+            done
+            return "$rc"
+          }
+
+          # 1차: recovery.img 까지 빌드
+          build_with_placeholders recoveryimage
+          RC=$?
+
+          # 2차: 그래도 실패하면 TWRP 램디스크만이라도 만든다
+          if [ "$RC" -ne 0 ]; then
             echo "::warning::recoveryimage 실패 -> ramdisk-recovery.img 단독 빌드를 시도합니다"
-            run_make "$PRODUCT_DIR/ramdisk-recovery.img"
+            build_with_placeholders "$PRODUCT_DIR/ramdisk-recovery.img"
+            RC=$?
           fi
 
           if [ -f "$PRODUCT_DIR/recovery.img" ] || [ -f "$PRODUCT_DIR/ramdisk-recovery.img" ] || [ -d "$PRODUCT_DIR/recovery/root" ]; then
