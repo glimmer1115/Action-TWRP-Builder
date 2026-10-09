@@ -282,6 +282,22 @@ jobs:
           else
             echo "::warning::repack 실패. native 이미지만 생성됩니다."
           fi
+          # C) 대조군: 순정 recovery 를 magiskboot 로 풀었다가 그대로 다시 묶기 (TWRP 없음)
+          rm -rf ctrl && mkdir ctrl
+          if (
+            set -e
+            cd ctrl
+            cp "$GITHUB_WORKSPACE/stock/stock_recovery.img" stock.img
+            "$MB" unpack -h stock.img
+            "$MB" repack stock.img new-boot.img
+          ); then
+            mkdir -p pack_ctrl
+            cp ctrl/new-boot.img pack_ctrl/recovery.img
+            add_marker pack_ctrl/recovery.img
+            (cd pack_ctrl && tar -H ustar -c recovery.img > ../output/ctrl_stock_repack.tar)
+            echo "ctrl   : $(stat -c %s pack_ctrl/recovery.img) bytes"
+          fi
+
           cp pack_native/recovery.img output/recovery_native.img
 
           echo "stock  : $(stat -c %s "$GITHUB_WORKSPACE/stock/stock_recovery.img") bytes"
