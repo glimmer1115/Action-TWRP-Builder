@@ -43,7 +43,6 @@ on:
         type: boolean
         required: false
         default: false
-
 env:
   MANIFEST_URL: ${{ github.event.inputs.MANIFEST_URL }}
   MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH }}
@@ -54,7 +53,6 @@ env:
   LUNCH_TARGET_IN: ${{ github.event.inputs.LUNCH_TARGET }}
   STOCK_RECOVERY_URL: ${{ github.event.inputs.STOCK_RECOVERY_URL }}
   USE_STOCK_KERNEL: ${{ github.event.inputs.USE_STOCK_KERNEL }}
-
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -198,6 +196,8 @@ jobs:
           def pad(n, p): return (-n) % p
           src, dst, rd_path = sys.argv[1:4]
           extra_cmd = sys.argv[4] if len(sys.argv) > 4 else ""
+          if not src or not os.path.exists(src):
+              print(f"Error: Source image {src} not found"); sys.exit(1)
           data = open(src, "rb").read()
           (k_size, k_addr, r_size, r_addr, s_size, s_addr, t_addr, p_size, v40, os_v) = struct.unpack_from("<10I", data, 8)
           name, cmdline, idv, extra = data[48:64], data[64:576], data[576:608], data[608:1632]
@@ -208,12 +208,14 @@ jobs:
           dt = data[pos:pos + (v40 if v40 > 4 else 0)]
           cmd_str = cmdline.split(b"\0")[0].decode("latin1")
           extra_str = extra.split(b"\0")[0].decode("latin1")
-          if rd_path == "-": new_rd = ramdisk
+          if rd_path == "-": 
+              new_rd = ramdisk
+          elif not rd_path or not os.path.exists(rd_path):
+              print(f"Error: Ramdisk path {rd_path} is invalid"); sys.exit(1)
           else:
               new_rd = open(rd_path, "rb").read()
               if new_rd[:2] != b"\x1f\x8b": new_rd = gzip.compress(new_rd, 9)
           if extra_cmd:
-              # KNOX BYPASS: MDM and Knox hate noisy logs. Add quiet/ignore flags.
               bypass_flags = "quiet ignore_loglevel androidboot.selinux=permissive"
               if bypass_flags not in cmd_str + extra_str:
                   cmd_str = (cmd_str + " " + bypass_flags).strip()
@@ -226,20 +228,29 @@ jobs:
           out += b"\0" * pad(len(out), p_size)
           for b, pres in ((kernel, True), (new_rd, True), (second, s_size > 0), (dt, len(dt) > 0)):
               if pres: out += b + b"\0" * pad(len(b), p_size)
-          out += b"SEANDROIDENFORCE" # Force Samsung Signature Marker
+          out += b"SEANDROIDENFORCE" 
           open(dst, "wb").write(out)
           PY
+          # 램디스크 찾기 로직 강화
           RD=""
-          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz"; do [ -f "$f" ] && RD="$f" && break; done
+          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR"/ramdisk-*.img; do 
+            if [ -f "$f" ]; then RD="$f"; break; fi
+          done
           if [ -z "$RD" ] && [ -d "$PROD_DIR/recovery/root" ]; then
             (cd "$PROD_DIR/recovery/root" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 > "$WS/twrp_ramdisk.gz")
             RD="$WS/twrp_ramdisk.gz"
           fi
-          # B1: Ultra-Clean Repack (Pure Stealth)
+          if [ -z "$RD" ]; then
+            echo "::error::Ramdisk not found! Listing directory for debug:"
+            ls -R "$PROD_DIR"
+            exit 1
+          fi
+          echo "Using ramdisk: $RD"
+          # B1: Ultra-Clean Repack
           python3 "$WS/repack.py" "$STOCK" "$WS/repack_out.img" "$RD"
           mkdir -p pack_repack && cp repack_out.img pack_repack/recovery.img
           (cd pack_repack && tar -H ustar -c recovery.img > ../output/twrp_stealth.tar)
-          # B2: Aggressive Permissive (Force Break)
+          # B2: Aggressive Permissive
           python3 "$WS/repack.py" "$STOCK" "$WS/repack_perm_out.img" "$RD" "androidboot.selinux=permissive"
           mkdir -p pack_repack_perm && cp repack_perm_out.img pack_repack_perm/recovery.img
           (cd pack_repack_perm && tar -H ustar -c recovery.img > ../output/twrp_aggressive.tar)
