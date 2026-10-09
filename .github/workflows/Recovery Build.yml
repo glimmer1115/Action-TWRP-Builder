@@ -43,6 +43,7 @@ on:
         type: boolean
         required: false
         default: false
+
 env:
   MANIFEST_URL: ${{ github.event.inputs.MANIFEST_URL }}
   MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH }}
@@ -53,6 +54,7 @@ env:
   LUNCH_TARGET_IN: ${{ github.event.inputs.LUNCH_TARGET }}
   STOCK_RECOVERY_URL: ${{ github.event.inputs.STOCK_RECOVERY_URL }}
   USE_STOCK_KERNEL: ${{ github.event.inputs.USE_STOCK_KERNEL }}
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -155,21 +157,7 @@ jobs:
           lunch "$LUNCH"
           PRODUCT_DIR="$ANDROID_PRODUCT_OUT"
           echo "PRODUCT_DIR=$PRODUCT_DIR" >> "$GITHUB_ENV"
-          
-          echo "--- Starting build process ---"
-          # make 로그를 파일로 저장하면서 동시에 화면 출력
           make -j"$(nproc)" recoveryimage 2>&1 | tee build_log.txt
-          
-          echo "--- Build Step Finished. Checking Files ---"
-          if [ -d "$PRODUCT_DIR" ]; then
-            echo "Contents of $PRODUCT_DIR:"
-            ls -R "$PRODUCT_DIR"
-          else
-            echo "CRITICAL ERROR: Product directory not created!"
-          fi
-          
-          echo "--- Last 500 lines of Build Log (Search for ERROR or FAILED) ---"
-          tail -n 500 build_log.txt
       - name: Package for Odin (Knox-Buster)
         working-directory: workspace
         run: |
@@ -194,7 +182,7 @@ jobs:
           dt = data[pos:pos + (v40 if v40 > 4 else 0)]
           cmd_str = cmdline.split(b"\0")[0].decode("latin1")
           extra_str = extra.split(b"\0")[0].decode("latin1")
-          if rd_path == "-": 
+          if rd_path == "-":
               new_rd = ramdisk
           elif not rd_path or not os.path.exists(rd_path):
               print(f"Error: Ramdisk path {rd_path} is invalid"); sys.exit(1)
@@ -214,11 +202,12 @@ jobs:
           out += b"\0" * pad(len(out), p_size)
           for b, pres in ((kernel, True), (new_rd, True), (second, s_size > 0), (dt, len(dt) > 0)):
               if pres: out += b + b"\0" * pad(len(b), p_size)
-          out += b"SEANDROIDENFORCE" 
+          out += b"SEANDROIDENFORCE"
           open(dst, "wb").write(out)
           PY
           RD=""
-          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR"/ramdisk-*.img; do 
+          # 램디스크 검색 강화
+          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR/recovery.img" "$PROD_DIR"/ramdisk-*.img; do
             if [ -f "$f" ]; then RD="$f"; break; fi
           done
           if [ -z "$RD" ] && [ -d "$PROD_DIR/recovery/root" ]; then
@@ -226,7 +215,7 @@ jobs:
             RD="$WS/twrp_ramdisk.gz"
           fi
           if [ -z "$RD" ]; then
-            echo "::error::Ramdisk not found! Creating emergency fallback ramdisk."
+            echo "::error::Ramdisk not found! Using fallback."
             echo "fallback" > "$WS/emergency_rd.img"
             RD="$WS/emergency_rd.img"
           fi
