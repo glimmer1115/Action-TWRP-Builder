@@ -2,29 +2,36 @@ name: Build Boot Image
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl tar
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential git
 
-      - name: Run Build Script
-        run: |
-          chmod +x build.sh
-          ./build.sh
+    - name: Set Permissions
+      run: |
+        chmod +x build.sh
+        # If android-bootimg-tool is a binary in the repo, make it executable
+        if [ -f "android-bootimg-tool" ]; then
+          chmod +x android-bootimg-tool
+        fi
 
-      - name: Upload Boot Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: boot-image-sm-t583
-          path: boot.img
+    - name: Run Build Script
+      run: ./build.sh
+
+    - name: Upload Boot Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: boot-image-smt583
+        path: boot.img
