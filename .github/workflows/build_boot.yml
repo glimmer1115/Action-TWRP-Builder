@@ -2,7 +2,7 @@ name: Build Boot Image
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -13,18 +13,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git
+          sudo apt-get install -y build-essential bison flex libssl-dev
 
-      - name: Run packaging script
+      - name: Install mkbootimg
         run: |
-          chmod +x build.sh
-          ./build.sh
+          # Install android-sdk-libbootimg or a standalone mkbootimg
+          sudo apt-get install -y android-sdk-libbootimg || \
+          (git clone https://github.com/osm0sis/mkbootimg.git && cd mkbootimg && make && sudo cp mkbootimg /usr/local/bin/)
 
-      - name: Upload boot.img artifact
+      - name: Make script executable
+        run: chmod +x build.sh
+
+      - name: Run build script
+        run: ./build.sh
+
+      - name: Upload boot.img
         uses: actions/upload-artifact@v4
         with:
-          name: sm-t583-boot-img
+          name: boot-image-smt583
           path: boot.img
