@@ -1,7 +1,9 @@
-name: Build Boot Image (SM-T583)
+name: SM-T583 Boot Image Builder
 
 on:
-  workflow_dispatch: # 수동 실행 가능하도록 설정
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # 수동 실행 가능하게 설정
 
 jobs:
   build:
@@ -11,21 +13,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Build Tools
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y android-sdk-libsparse-utils
-          # mkbootimg가 패키지에 포함되지 않은 경우를 위해 추가 설치 또는 바이너리 다운로드 과정이 필요할 수 있습니다.
-          # 여기서는 기본적으로 도구가 설치되었다고 가정하거나 build.sh 내에서 처리합니다.
+          sudo apt-get install -y build-essential bc bison flex libssl-dev
 
       - name: Make build script executable
-        run: chmod +x build.sh # 윈도우 업로드 시 소실된 실행 권한 복구
+        run: chmod +x build.sh
 
-      - name: Run Build Script
+      - name: Run build script
         run: ./build.sh
 
-      - name: Upload Artifact
+      - name: Upload boot image artifact
         uses: actions/upload-artifact@v4
         with:
           name: SM-T583-boot-image
           path: boot.img
+          retention-days: 5
