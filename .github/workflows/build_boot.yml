@@ -1,32 +1,33 @@
-name: SM-T583 Boot Image Builder
+name: Build Boot Image
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: # 수동 실행 가능하게 설정
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 수동 실행 가능하도록 추가
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev
 
-      - name: Make build script executable
-        run: chmod +x build.sh
+      - name: Make build.sh executable
+        run: chmod +x ./build.sh
 
-      - name: Run build script
+      - name: Run Build Script
         run: ./build.sh
 
-      - name: Upload boot image artifact
+      - name: Upload boot.img Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SM-T583-boot-image
+          name: samsung-tab-a-boot-img
           path: boot.img
-          retention-days: 5
