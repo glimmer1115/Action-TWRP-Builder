@@ -1,3 +1,100 @@
+name: Recovery Build - Debug Edition
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_URL: {description: 'TWRP manifest URL', required: false, default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'}
+      MANIFEST_BRANCH: {description: 'TWRP manifest branch', required: false, default: 'twrp-8.1'}
+      DEVICE_TREE_URL: {description: '디바이스 트리 git URL', required: true, default: 'https://github.com/glimmer1115/android_device_samsung_gtaxlwifi'}
+      DEVICE_TREE_BRANCH: {description: '디바이스 트리 브랜치', required: false, default: 'android-6.0'}
+      CODENAME_SRC: {description: '트리의 원래 코드네임', required: false, default: 'gtaxlwifi'}
+      CODENAME_DST: {description: '내 기기 코드네임 (비우면 SRC)', required: false, default: 'gtaxldwifikx'}
+      LUNCH_TARGET: {description: 'lunch 대상 (비우면 자동)', required: false, default: ''}
+      STOCK_RECOVERY_URL: {description: '순정 recovery.img URL (필수)', required: true, default: ''}
+      USE_STOCK_KERNEL: {description: '순정 kernel 강제 사용', type: boolean, required: false, default: true}
+      PUBLISH_RELEASE: {description: 'GitHub Release 업로드', type: boolean, required: false, default: false}
+
+env:
+  MANIFEST_URL: ${{ github.event.inputs.MANIFEST_URL }}
+  MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH }}
+  DEVICE_TREE_URL: ${{ github.event.inputs.DEVICE_TREE_URL }}
+  DEVICE_TREE_BRANCH: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
+  CODENAME_SRC: ${{ github.event.inputs.CODENAME_SRC }}
+  CODENAME_DST: ${{ github.event.inputs.CODENAME_DST }}
+  LUNCH_TARGET_IN: ${{ github.event.inputs.LUNCH_TARGET }}
+  STOCK_RECOVERY_URL: ${{ github.event.inputs.STOCK_RECOVERY_URL }}
+  USE_STOCK_KERNEL: ${{ github.event.inputs.USE_STOCK_KERNEL }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    permissions: {contents: write}
+    steps:
+      - name: Check Out
+        uses: actions/checkout@v4
+        with: {lfs: true}
+
+      - name: Cleanup disk
+        uses: rokibhasansagar/slimhub_actions@main
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with: {swap-size-gb: 12}
+
+      - name: Prepare the environment
+        run: |
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -yq \
+            git curl wget unzip zip tar bc bison flex m4 gperf ccache lzop lz4 liblz4-tool \
+            gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses-dev lib32z1-dev lib32readline-dev \
+            libncurses5 libncurses-dev libxml2-utils xsltproc libssl-dev squashfs-tools \
+            schedtool pngcrush imagemagick python2 python3 python3-pip android-sdk-libsparse-utils \
+            device-tree-compiler cpio file xxd
+          sudo update-alternatives --install /usr/bin/python python /usr/bin/python2 10
+          sudo update-alternatives --set python /usr/bin/python2
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libncurses.so.6 /usr/lib/x86_64-linux-gnu/libncurses.so.5 || true
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5 || true
+          pip3 install --quiet lz4
+
+      - name: Install OpenJDK 8
+        uses: actions/setup-java@v4
+        with: {distribution: 'zulu', java-version: '8'}
+
+      - name: Install repo
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Initialize and sync repo
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@users.noreply.github.com"
+          mkdir -p workspace && cd workspace
+          repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+          for i in 1 2 3 4; do
+            echo "=== Sync attempt $i ==="
+            if repo sync -c -j4 --force-sync --no-clone-bundle --no-tags; then break; fi
+            if [ "$i" -eq 4 ]; then echo "Sync failed after 4 attempts"; exit 1; fi
+            echo "retry in 45s..."; sleep 45
+          done
+
+      - name: Prepare stock recovery
+        run: |
+          mkdir -p tools stock
+          if [ -f "$GITHUB_WORKSPACE/recovery.img" ]; then
+            cp "$GITHUB_WORKSPACE/recovery.img" stock/stock_recovery.img
+          elif [ -n "$STOCK_RECOVERY_URL" ]; then
+            wget -nv "$STOCK_RECOVERY_URL" -O stock/stock_recovery.img
+          else
+            echo "::error::recovery.img missing"; exit 1
+          fi
+          wget -nv https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O tools/magisk.apk
+          unzip -j -o tools/magisk.apk 'lib/x86_64/libmagiskboot.so' -d tools
+          mv tools/libmagiskboot.so tools/magiskboot
+          chmod +x tools/magiskboot
+
       - name: Configure Device Tree
         working-directory: workspace
         run: |
@@ -17,7 +114,7 @@
             grep -rIl -- "$CODENAME_SRC" . | xargs -r sed -i "s/${CODENAME_SRC}/${CODENAME_DST}/g"
             cd - >/dev/null
           fi
-          
+
           if [ -n "$LUNCH_TARGET_IN" ]; then
             LUNCH="$LUNCH_TARGET_IN"
           else
@@ -26,7 +123,6 @@
           fi
           echo "LUNCH=$LUNCH" >> "$GITHUB_ENV"
 
-          # ⭐ [핵심 수정] 커널 추출 + dtb + cmdline
           if [ "$USE_STOCK_KERNEL" = "true" ]; then
             KEXT="$GITHUB_WORKSPACE/kext"
             rm -rf "$KEXT"; mkdir -p "$KEXT"
@@ -34,31 +130,254 @@
               cp "$GITHUB_WORKSPACE/stock/stock_recovery.img" boot.img && \
               "$GITHUB_WORKSPACE/tools/magiskboot" unpack boot.img > unpack.log 2>&1 )
             
-            # 커널 복사
             if [ -f "$KEXT/kernel" ]; then
               KSZ=$(stat -c%s "$KEXT/kernel")
-              echo "[OK] 커널 추출: $KSZ bytes"
+              echo "[OK] 순정 커널 추출: $KSZ bytes"
               cp "$KEXT/kernel" "$TREE_DIR/Image"
             else
-              echo "::error::커널 추출 실패"
-              cat "$KEXT/unpack.log"
-              exit 1
+              echo "::error::커널 추출 실패"; cat "$KEXT/unpack.log"; exit 1
             fi
-            
-            # dtb 복사 (있는 경우)
+
             if [ -f "$KEXT/dtb" ]; then
               DSZ=$(stat -c%s "$KEXT/dtb")
-              echo "[OK] dtb 추출: $DSZ bytes"
+              echo "[OK] 순정 DTB 추출: $DSZ bytes"
               cp "$KEXT/dtb" "$TREE_DIR/dtb.img"
-              echo "BOARD_PREBUILT_DTB_IMAGE := $TREE_DIR/dtb.img" >> "$TREE_DIR/BoardConfig.mk"
-            else
-              echo "[INFO] dtb 파일 없음 (커널에 포함된 것으로 추정)"
+              echo "BOARD_PREBUILT_DTB_IMAGE := device/samsung/${TREE_NAME}/dtb.img" >> "$TREE_DIR/BoardConfig.mk"
             fi
             
-            # ⭐ cmdline 추가 (SELinux permissive)
             echo "BOARD_KERNEL_CMDLINE := androidboot.selinux=permissive" >> "$TREE_DIR/BoardConfig.mk"
-            echo "[OK] cmdline 추가 완료"
-            
-            # unpack 로그 저장 (디버깅용)
-            cat "$KEXT/unpack.log" >> "$GITHUB_STEP_SUMMARY"
+            echo "[OK] BoardConfig.mk 설정 완료"
           fi
+
+      - name: Build recovery
+        working-directory: workspace
+        run: |
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+          source build/envsetup.sh
+          lunch "$LUNCH"
+          make -j"$(nproc)" recoveryimage 2>&1 | tee build_log.txt
+          echo "PRODUCT_DIR=$ANDROID_PRODUCT_OUT" >> "$GITHUB_ENV"
+
+      - name: Diagnose
+        working-directory: workspace
+        run: |
+          set +e
+          WS="$PWD"; PROD_DIR="$PRODUCT_DIR"
+          cat > "$WS/inspect.py" <<'PY'
+          import sys, struct, gzip, subprocess
+          F=["kernel_size","kernel_addr","ramdisk_size","ramdisk_addr","second_size","second_addr","tags_addr","page_size","header_version","os_version"]
+          def detect(b):
+              if b[:2]==b"\x1f\x8b": return "gzip"
+              if b[:4]==b"\x02\x21\x4c\x18": return "lz4"
+              if b[:6] in (b"070701",b"070702",b"070707"): return "cpio(uncompressed)"
+              if b[:2]==b"\x1f\x9d": return "compress(z)"
+              return "unknown"
+          def decom(b):
+              if b[:2]==b"\x1f\x8b": return gzip.decompress(b)
+              if b[:4]==b"\x02\x21\x4c\x18":
+                  import lz4.frame; return lz4.frame.decompress(b)
+              return b
+          if len(sys.argv)>=3 and sys.argv[1]=="--rd":
+              p=sys.argv[2]; d=open(p,"rb").read()
+              print(f"file          : {p}")
+              print(f"size          : {len(d)} bytes")
+              print(f"compression   : {detect(d)}")
+              try:
+                  raw=decom(d)
+                  print(f"decompressed  : {len(raw)} bytes")
+                  open("/tmp/_rd.cpio","wb").write(raw)
+                  r=subprocess.run(["cpio","-it","--quiet","-F","/tmp/_rd.cpio"],capture_output=True,timeout=900)
+                  names=r.stdout.decode("utf-8","replace").splitlines()
+                  print(f"cpio entries  : {len(names)}")
+                  print("key files:")
+                  for k in ("init","sbin/recovery","res/keys","etc/recovery.fstab","etc/twrp.fstab","default.prop","ueventd.rc"):
+                      hit=[n for n in names if n.lstrip('.').lstrip('/').startswith(k)]
+                      print(f"   {k:22s}: {'FOUND' if hit else 'MISSING'}")
+              except Exception as e:
+                  print("cpio parse failed:", e)
+              sys.exit(0)
+          d=open(sys.argv[1],"rb").read()
+          print(f"file size     : {len(d)}")
+          print(f"magic         : {d[:8]!r}")
+          v=struct.unpack_from("<10I",d,8)
+          for n,x in zip(F,v): print(f"  {n:14s}: {x} (0x{x:x})")
+          print(f"name          : {d[48:64].rstrip(bytes(1)).decode('latin1')}")
+          c=d[64:576].split(b'\0')[0]
+          print(f"cmdline ({len(c)})   : {c.decode('latin1')}")
+          e=d[608:1632].split(b'\0')[0]
+          print(f"extra ({len(e)})   : {e.decode('latin1')}")
+          print(f"footer        : {d[-16:]!r}")
+          PY
+          DIAG="$WS/diag.txt"; : > "$DIAG"
+          {
+            echo "########## 1. STOCK RECOVERY ##########"
+            python3 "$WS/inspect.py" "$GITHUB_WORKSPACE/stock/stock_recovery.img"
+            echo
+            echo "########## 2. EXTRACTED KERNEL ##########"
+            if [ -f "$GITHUB_WORKSPACE/kext/kernel" ]; then
+              KSZ=$(stat -c%s "$GITHUB_WORKSPACE/kext/kernel")
+              echo "kernel size: $KSZ bytes"
+              head -c4 "$GITHUB_WORKSPACE/kext/kernel" | xxd
+            else
+              echo "!! 커널 추출 안 됨 !!"
+            fi
+            echo
+            echo "########## 3. BUILD OUTPUT ##########"
+            ls -l "$PROD_DIR"/*.img 2>/dev/null
+            echo
+            echo "########## 4. built recovery.img ##########"
+            [ -f "$PROD_DIR/recovery.img" ] && python3 "$WS/inspect.py" "$PROD_DIR/recovery.img"
+          } > "$DIAG" 2>&1
+          cat "$DIAG"
+
+      - name: Package for Odin
+        working-directory: workspace
+        run: |
+          set +e
+          WS="$PWD"; PROD_DIR="$PRODUCT_DIR"
+          STOCK_R="$GITHUB_WORKSPACE/stock/stock_recovery.img"
+          TOOLS="$GITHUB_WORKSPACE/tools"
+          PART_R=$((0x002600000))
+          mkdir -p output
+          DIAG="$WS/diag.txt"
+          cat > "$WS/repack.py" <<'PY'
+          import os, sys, struct, hashlib, gzip
+          def pad(n,p): return (-n)%p
+          def decom(b):
+              if b[:2]==b"\x1f\x8b": return gzip.decompress(b)
+              if b[:4]==b"\x02\x21\x4c\x18":
+                  import lz4.frame; return lz4.frame.decompress(b)
+              return b
+          def comp(b,m):
+              if m=="gzip": return gzip.compress(b,9)
+              if m=="lz4":
+                  import lz4.frame; return lz4.frame.compress(b)
+              if m=="raw": return b
+              raise SystemExit("bad comp mode: "+m)
+          PERM="androidboot.selinux=permissive"
+          src,dst,rd_path,cmode,cmdmode = sys.argv[1:6]
+          data=open(src,"rb").read()
+          if data[:8]!=b"ANDROID!":
+              print("[fail] src not ANDROID! image:",src); sys.exit(1)
+          (k_size,k_addr,r_size,r_addr,s_size,s_addr,t_addr,p_size,hdr_ver,os_v)=struct.unpack_from("<10I",data,8)
+          name=data[48:64]; cmdline=data[64:576]; extra=data[608:1632]
+          pos=p_size
+          kernel=data[pos:pos+k_size]; pos+=k_size+pad(k_size,p_size)
+          ramdisk_old=data[pos:pos+r_size]; pos+=r_size+pad(r_size,p_size)
+          second=data[pos:pos+s_size]; pos+=s_size+pad(s_size,p_size)
+          rec_dtbo_size=0; dtb_size=0
+          if hdr_ver>=1: rec_dtbo_size,_=struct.unpack_from("<IQ",data,1632)
+          if hdr_ver>=2: dtb_size,_=struct.unpack_from("<IQ",data,1652)
+          rec_dtbo=data[pos:pos+rec_dtbo_size]; pos+=rec_dtbo_size+pad(rec_dtbo_size,p_size)
+          dtb=data[pos:pos+dtb_size]; pos+=dtb_size+pad(dtb_size,p_size)
+          tail=data[pos:]
+          cmd_str=cmdline.split(b"\0")[0].decode("latin1")
+          extra_str=extra.split(b"\0")[0].decode("latin1")
+          if cmdmode=="perm" and PERM not in cmd_str:
+              cand=(cmd_str+" "+PERM).strip()
+              if len(cand)<=511: cmd_str=cand
+              else:
+                  extra_str=(extra_str+" "+PERM).strip()
+          if rd_path=="-":
+              new_rd=ramdisk_old
+          else:
+              orig=open(rd_path,"rb").read()
+              raw=decom(orig)
+              if cmode=="stockmatch":
+                  if ramdisk_old[:2]==b"\x1f\x8b": cmode="gzip"
+                  elif ramdisk_old[:4]==b"\x02\x21\x4c\x18": cmode="lz4"
+                  else: cmode="raw"
+              new_rd=comp(raw,cmode)
+              print(f"[info] rd src={len(orig)} raw={len(raw)} mode={cmode} final={len(new_rd)}")
+          sha=hashlib.sha1()
+          for b in (kernel,new_rd,second,rec_dtbo,dtb):
+              if len(b):
+                  sha.update(struct.pack("<I",len(b))); sha.update(b)
+          new_id=sha.digest().ljust(32,b"\0")
+          hdr=struct.pack("<8s10I16s512s32s1024s", b"ANDROID!",
+              k_size,k_addr,len(new_rd),r_addr,s_size,s_addr,t_addr,p_size,hdr_ver,os_v,
+              name,cmd_str.encode("latin1"),new_id,extra_str.encode("latin1"))
+          out=bytearray(hdr); out+=b"\0"*pad(len(out),p_size)
+          for b in (kernel,new_rd,second,rec_dtbo,dtb):
+              if len(b): out+=b+b"\0"*pad(len(b),p_size)
+          if tail: out+=tail
+          open(dst,"wb").write(out)
+          print(f"[info] wrote {dst} = {len(out)} bytes")
+          PY
+          cat > "$WS/decomp.py" <<'PY'
+          import sys, gzip
+          b=open(sys.argv[1],"rb").read()
+          if b[:2]==b"\x1f\x8b": sys.stdout.buffer.write(gzip.decompress(b))
+          elif b[:4]==b"\x02\x21\x4c\x18":
+              import lz4.frame; sys.stdout.buffer.write(lz4.frame.decompress(b))
+          else: sys.stdout.buffer.write(b)
+          PY
+          RD=""
+          for f in "$PROD_DIR/ramdisk-recovery.img" "$PROD_DIR/ramdisk-recovery.cpio.gz" "$PROD_DIR"/ramdisk-*.img; do
+            [ -f "$f" ] && { RD="$f"; break; }
+          done
+          if [ -z "$RD" ] && [ -f "$PROD_DIR/recovery.img" ]; then
+            rm -rf "$WS/mbx"; mkdir -p "$WS/mbx"
+            ( cd "$WS/mbx" && "$TOOLS/magiskboot" unpack "$PROD_DIR/recovery.img" >unpack.log 2>&1 )
+            for c in ramdisk.cpio ramdisk.cpio.gz; do
+              [ -f "$WS/mbx/$c" ] && { RD="$WS/mbx/$c"; break; }
+            done
+          fi
+          if [ -z "$RD" ] && [ -d "$PROD_DIR/recovery/root" ]; then
+            ( cd "$PROD_DIR/recovery/root" && find . | cpio -o -H newc -R 0:0 2>/dev/null > "$WS/twrp_ramdisk.cpio" )
+            RD="$WS/twrp_ramdisk.cpio"
+          fi
+          { echo; echo "########## 5. TWRP 램디스크 ##########"; echo "path: $RD"
+            python3 "$WS/inspect.py" --rd "$RD"; } | tee -a "$DIAG"
+          if [ -z "$RD" ] || [ ! -f "$RD" ]; then
+            echo "::error::램디스크 못 찾음"; exit 1
+          fi
+          build_variant () {
+            local tag="$1" cmode="$2" cmdmode="$3" part="$4"
+            echo "" | tee -a "$DIAG"
+            echo "########## VARIANT: $tag ##########" | tee -a "$DIAG"
+            python3 "$WS/repack.py" "$STOCK_R" "$WS/out_$tag.img" "$RD" "$cmode" "$cmdmode" 2>&1 | tee -a "$DIAG"
+            if [ ! -f "$WS/out_$tag.img" ]; then echo "[fail] $tag" | tee -a "$DIAG"; return; fi
+            rm -rf "$WS/pack_$tag"; mkdir -p "$WS/pack_$tag"
+            cp "$WS/out_$tag.img" "$WS/pack_$tag/recovery.img"
+            ( cd "$WS/pack_$tag" && tar -H ustar -c recovery.img > "$WS/output/twrp_$tag.tar" )
+            local sz; sz=$(stat -c%s "$WS/out_$tag.img")
+            local flag="OK"
+            if [ "$sz" -gt "$part" ]; then flag="*** TOO BIG > partition($part) ***"; fi
+            echo "  -> output/twrp_$tag.tar   image=${sz}B   $flag" | tee -a "$DIAG"
+          }
+          mb_variant () {
+            local tag="$1"
+            echo "" | tee -a "$DIAG"
+            echo "########## VARIANT: $tag (magiskboot) ##########" | tee -a "$DIAG"
+            local d="$WS/mb_$tag"; rm -rf "$d"; mkdir -p "$d"
+            ( cd "$d" && cp "$STOCK_R" boot.img && "$TOOLS/magiskboot" unpack boot.img >unpack.log 2>&1 )
+            python3 "$WS/decomp.py" "$RD" > "$d/ramdisk.cpio" 2>>"$DIAG"
+            if [ -f "$d/header" ] && grep -q '^cmdline=' "$d/header"; then
+              grep -q 'androidboot.selinux=permissive' "$d/header" || \
+                sed -i 's/^cmdline=.*/& androidboot.selinux=permissive/' "$d/header"
+            fi
+            ( cd "$d" && "$TOOLS/magiskboot" repack boot.img new.img >repack.log 2>&1 )
+            if [ ! -f "$d/new.img" ]; then echo "[fail] magiskboot $tag" | tee -a "$DIAG"; return; fi
+            rm -rf "$WS/pack_$tag"; mkdir -p "$WS/pack_$tag"
+            cp "$d/new.img" "$WS/pack_$tag/recovery.img"
+            ( cd "$WS/pack_$tag" && tar -H ustar -c recovery.img > "$WS/output/twrp_$tag.tar" )
+            local sz; sz=$(stat -c%s "$d/new.img")
+            echo "  -> output/twrp_$tag.tar   image=${sz}B" | tee -a "$DIAG"
+          }
+          build_variant ctrl        raw        perm "$PART_R"
+          build_variant stockmatch  stockmatch perm "$PART_R"
+          build_variant gzip        gzip       perm "$PART_R"
+          build_variant lz4         lz4        perm "$PART_R"
+          build_variant raw         raw        perm "$PART_R"
+          mb_variant   magiskboot
+          cp "$DIAG" "$WS/output/diag.txt"
+          echo "=== FINAL OUTPUT ==="; ls -l output/
+
+      - name: Upload Artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-recovery-multi
+          path: workspace/output/
