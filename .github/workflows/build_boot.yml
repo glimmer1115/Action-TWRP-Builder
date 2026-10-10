@@ -1,37 +1,31 @@
-name: Build Boot Image
+name: Build Boot Image (SM-T583)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 수동 실행 가능하게 설정
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential git
+      - name: Set execution permissions
+        run: |
+          chmod +x build.sh
+          # 만약 mkbootimg 같은 바이너리가 레포지토리에 포함되어 있다면 함께 권한 부여
+          if [ -f "mkbootimg" ]; then chmod +x mkbootimg; fi
 
-    - name: Set Permissions
-      run: |
-        chmod +x build.sh
-        # If android-bootimg-tool is a binary in the repo, make it executable
-        if [ -f "android-bootimg-tool" ]; then
-          chmod +x android-bootimg-tool
-        fi
+      - name: Run Build Script
+        run: ./build.sh
 
-    - name: Run Build Script
-      run: ./build.sh
-
-    - name: Upload Boot Image
-      uses: actions/upload-artifact@v4
-      with:
-        name: boot-image-smt583
-        path: boot.img
+      - name: Upload boot.img Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SM-T583-boot-image
+          path: out/boot.img
