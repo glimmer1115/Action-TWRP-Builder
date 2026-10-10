@@ -1,10 +1,8 @@
-name: Build Boot Image (SM-T583)
+name: Build Boot Image
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -15,26 +13,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git wget python3
+          sudo apt-get install -y build-essential git
 
-      - name: Install android-bootimg-tool
-        run: |
-          # 경량 빌드 도구 설치 (mkbootimg 대용)
-          git clone https://github.com/osm0sis/android-bootimg-tool.git
-          cd android-bootimg-tool
-          make
-          sudo cp android-bootimg-tool /usr/local/bin/
-
-      - name: Run Build Script
+      - name: Run packaging script
         run: |
           chmod +x build.sh
           ./build.sh
 
-      - name: Upload Boot Image Artifact
+      - name: Upload boot.img artifact
         uses: actions/upload-artifact@v4
         with:
-          name: boot-image-sm-t583
+          name: sm-t583-boot-img
           path: boot.img
