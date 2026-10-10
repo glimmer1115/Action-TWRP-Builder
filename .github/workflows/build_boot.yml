@@ -10,28 +10,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bison flex libssl-dev
+          sudo apt-get install -y curl tar
 
-      - name: Install mkbootimg
+      - name: Run Build Script
         run: |
-          # Install android-sdk-libbootimg or a standalone mkbootimg
-          sudo apt-get install -y android-sdk-libbootimg || \
-          (git clone https://github.com/osm0sis/mkbootimg.git && cd mkbootimg && make && sudo cp mkbootimg /usr/local/bin/)
+          chmod +x build.sh
+          ./build.sh
 
-      - name: Make script executable
-        run: chmod +x build.sh
-
-      - name: Run build script
-        run: ./build.sh
-
-      - name: Upload boot.img
+      - name: Upload Boot Image
         uses: actions/upload-artifact@v4
         with:
-          name: boot-image-smt583
+          name: boot-image-sm-t583
           path: boot.img
