@@ -5,11 +5,11 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # 수동 실행 가능하도록 추가
+  workflow_dispatch: # 수동 실행
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04  # 최신 우분투는 구형 안드로이드 컴파일러와 충돌하므로 20.04 버전을 추천합니다.
 
     steps:
       - name: Checkout Repository
@@ -18,7 +18,10 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev
+          sudo apt-get install -y build-essential bc bison flex libssl-dev \
+            liblz4-tool lzop xz-utils ccache git python3 python3-pip \
+            gcc-arm-linux-gnueabi g++-arm-linux-gnueabi \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Make build.sh executable
         run: chmod +x ./build.sh
@@ -26,8 +29,14 @@ jobs:
       - name: Run Build Script
         run: ./build.sh
 
+      - name: Check generated files
+        run: ls -la  # 빌드 후 파일이 실제로 잘 만들어졌는지 로그로 확인하는 단계
+
       - name: Upload boot.img Artifact
         uses: actions/upload-artifact@v4
         with:
           name: samsung-tab-a-boot-img
-          path: boot.img
+          path: |
+            boot.img
+            arch/arm64/boot/Image
+            arch/arm64/boot/dts/exynos7870-gtaxladwifikx.dtb
