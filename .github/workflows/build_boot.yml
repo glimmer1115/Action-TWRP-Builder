@@ -1,0 +1,44 @@
+name: Build Boot Image (SM-T583)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 수동 실행 가능하게 설정
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev python3-pip
+          # 필요한 추가 도구가 있다면 여기에 추가하세요 (예: mkbootimg, avbtool 등)
+
+      - name: Build boot.img
+        run: |
+          # 프로젝트 내의 빌드 스크립트 경로에 맞게 수정하세요.
+          # 예: ./build.sh 또는 python3 build_boot.py
+          chmod +x ./build.sh
+          ./build.sh
+        # 만약 빌드 스크립트 파일명이 다르다면 위 부분을 수정해 주세요.
+
+      - name: Upload boot.img Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SM-T583-boot-image
+          path: |
+            *.img
+            boot.img
+          if-no-files-found: error
